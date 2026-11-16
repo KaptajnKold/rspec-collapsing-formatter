@@ -19,4 +19,5 @@ Gem::Specification.new do |spec|
   spec.require_paths = ["lib"]
 
   spec.add_dependency "rspec-core", "~> 3.10"
+  spec.add_dependency "unicode-display_width", ">= 2.4", "< 4"
 end

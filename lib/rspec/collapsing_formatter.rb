@@ -2,35 +2,43 @@
 
 require "rspec/core"
 require "rspec/core/formatters/base_text_formatter"
+require "rspec/collapsing_formatter/symbols"
+require "rspec/collapsing_formatter/tree"
+require "rspec/collapsing_formatter/layout"
 require "rspec/collapsing_formatter/stream_output"
 
 module RSpec
   # A documentation-style formatter that collapses finished example groups.
   #
   # Failure, pending and summary output is inherited unchanged from RSpec's
-  # BaseTextFormatter. This class only translates RSpec events into calls on an
-  # output object, which owns everything about how lines reach the terminal.
+  # BaseTextFormatter. This class only translates RSpec events into changes to the
+  # tree and calls on an output object, which owns everything about how lines reach
+  # the terminal.
   class CollapsingFormatter < Core::Formatters::BaseTextFormatter
     VERSION = "0.1.0"
 
     Core::Formatters.register self,
                               :example_group_started, :example_group_finished,
-                              :example_passed, :example_failed, :example_pending
+                              :example_started, :example_passed, :example_failed, :example_pending
 
     def initialize(output)
       super
-      @renderer = StreamOutput.new(output)
-      @depth = 0
+      @tree = Tree.new
+      @renderer = StreamOutput.new(output, Symbols.for(output))
       @failure_count = 0
     end
 
     def example_group_started(notification)
-      @renderer.group_started(notification.group.description.strip, @depth)
-      @depth += 1
+      group = @tree.group_started(notification.group.description.strip)
+      @renderer.group_started(group, @tree.depth - 1)
     end
 
     def example_group_finished(_notification)
-      @depth -= 1
+      @tree.group_finished
+    end
+
+    def example_started(notification)
+      @tree.example_started(notification.example.description.strip)
     end
 
     def example_passed(notification)
@@ -49,8 +57,11 @@ module RSpec
 
     private
 
+    # Descriptions are read again on finish: RSpec generates descriptions for
+    # examples like `it { is_expected.to be_valid }` only after they have run.
     def example_finished(example, status, detail = nil)
-      @renderer.example_finished(example.description.strip, @depth, status, detail)
+      node = @tree.example_finished(example.description.strip, status, detail)
+      @renderer.example_finished(node, @tree.depth)
     end
   end
 end

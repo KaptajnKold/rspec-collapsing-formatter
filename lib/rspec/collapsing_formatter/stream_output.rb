@@ -8,32 +8,25 @@ module RSpec
     # one line per example when it finishes. Never emits cursor-control sequences;
     # color is applied only through RSpec's ConsoleCodes, which honours --color settings.
     class StreamOutput
-      UNICODE_GLYPHS = { passed: "✓", failed: "✗", pending: "•" }.freeze
-      ASCII_GLYPHS = { passed: "+", failed: "x", pending: "*" }.freeze
-      COLORS = { passed: :success, failed: :failure, pending: :pending }.freeze
-      INDENT = "  "
-
-      def initialize(output)
+      def initialize(output, symbols)
         @output = output
-        @glyphs = unicode?(output) ? UNICODE_GLYPHS : ASCII_GLYPHS
+        @layout = Layout.new(symbols)
       end
 
-      def group_started(description, depth)
+      def group_started(group, depth)
         @output.puts if depth.zero?
-        @output.puts "#{INDENT * depth}#{description}"
+        write(@layout.header_line(group, depth))
       end
 
-      def example_finished(description, depth, status, detail = nil)
-        text = "#{@glyphs.fetch(status)} #{description}"
-        text += " (#{detail})" if detail
-        @output.puts "#{INDENT * depth}#{Core::Formatters::ConsoleCodes.wrap(text, COLORS.fetch(status))}"
+      def example_finished(example, depth)
+        write(@layout.example_line(example, depth))
       end
 
       private
 
-      def unicode?(output)
-        encoding = (output.external_encoding if output.respond_to?(:external_encoding)) || Encoding.default_external
-        encoding == Encoding::UTF_8
+      def write(line)
+        text = line.style ? Core::Formatters::ConsoleCodes.wrap(line.text, line.style) : line.text
+        @output.puts(line.indent + text)
       end
     end
   end

@@ -106,6 +106,36 @@ RSpec.describe RSpec::CollapsingFormatter do
       expect(output).to include("4 examples, 0 failures, 3 pending")
     end
 
+    it "uses descriptions that RSpec generates after an example has run" do
+      output = run_suite do
+        RSpec.describe("User") do
+          subject { 1 }
+          it { is_expected.to eq(1) }
+        end
+      end
+
+      expect(progress_output(output)).to include("  ✓ is expected to eq 1\n")
+    end
+
+    it "marks every example as failed when a before(:context) hook fails" do
+      output = run_suite do
+        RSpec.describe("User") do
+          before(:context) { raise "database unavailable" }
+          it("is valid") { expect(1).to eq(1) }
+          it("can log in") { expect(1).to eq(1) }
+        end
+      end
+
+      expect(progress_output(output)).to eq(<<~TEXT)
+
+        User
+          ✗ is valid (FAILED - 1)
+          ✗ can log in (FAILED - 2)
+
+      TEXT
+      expect(output).to include("database unavailable")
+    end
+
     it "emits no escape sequences when color is disabled" do
       output = run_suite do
         RSpec.describe("User") do

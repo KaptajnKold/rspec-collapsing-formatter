@@ -77,11 +77,12 @@ Prior art worth reading (not depending on): Fuubar, `rspec-instafail`, `nyan-cat
 | Situation | Display |
 |---|---|
 | Running group | Header plus indented children, as in the documentation formatter |
-| Running example | Description with a dim "running" marker, replaced by its result |
+| Running example | `▸ description` in the `:detail` color (RSpec's ConsoleCodes has no "dim"), replaced by its result |
 | Finished, all passed | `✓ name (3 examples)` / `(1 example)` |
 | Finished, pending but no failures | `• name (6 passed, 1 pending)` in yellow; never looks fully green |
 | Finished with any failure | Stays expanded: `✗ name (1 passed, 1 failed)`. Passed subgroups collapse, failed ones expand recursively. Examples show `✓`, `✗ … (FAILED - n)`, `• … (PENDING: reason)` |
-| Finished top-level group | Same rules, then committed (see §5), followed by a blank line |
+| Finished top-level group | Same rules, then committed (see §5) |
+| Between top-level groups | A blank line when either neighbor is expanded; collapsed summaries stack directly |
 
 - Colors come from `RSpec::Core::Formatters::ConsoleCodes`, so `--color`, `--no-color`
   and `--force-color` are respected.
@@ -89,7 +90,12 @@ Prior art worth reading (not depending on): Fuubar, `rspec-instafail`, `nyan-cat
   `unicode-display_width`) with an ellipsis, so one logical line is always one physical
   line. Truncation happens on plain text, before color is applied. Full descriptions still
   appear in RSpec's failure output.
-- Glyphs fall back to ASCII (`+`, `x`, `*`) when the output encoding is not UTF-8.
+- Glyphs fall back to ASCII (`+`, `x`, `*`, `>`, `...`) when the output encoding is not UTF-8.
+- Example descriptions are re-read when an example finishes, because RSpec generates
+  descriptions such as "is expected to eq 1" only after the example has run.
+- Emoji widths vary between `unicode-display_width` 2.x and 3.x (and between terminals).
+  2.x over-estimates some sequences, which only cuts lines shorter, so the gem accepts
+  `>= 2.4, < 4` to avoid conflicts with apps locked to 2.x. *(Documented simplification.)*
 
 ## 5. Live terminal output (`live_output.rb`)
 
