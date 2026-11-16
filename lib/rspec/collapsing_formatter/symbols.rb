@@ -31,6 +31,13 @@ module RSpec
       def style(status)
         STYLES.fetch(status)
       end
+
+      # The line as it is written to the terminal, colored according to RSpec's
+      # color configuration.
+      def paint(line)
+        text = line.style ? Core::Formatters::ConsoleCodes.wrap(line.text, line.style) : line.text
+        line.indent + text
+      end
     end
   end
 end

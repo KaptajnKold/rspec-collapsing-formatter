@@ -34,8 +34,10 @@ module RSpec
 
       # Lines for a list of top-level groups. A blank line separates adjacent groups
       # when either of them is expanded; collapsed summaries stack directly.
-      def lines(groups)
-        previous = nil
+      #
+      # `previous` is the top-level group displayed just above these, if any (e.g. one
+      # already committed to the terminal), so the first group gets the right separator.
+      def lines(groups, previous: nil)
         groups.each_with_object([]) do |group, lines|
           group_lines = group_lines(group)
           next if group_lines.empty?

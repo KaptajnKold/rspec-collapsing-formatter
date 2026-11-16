@@ -6,6 +6,7 @@ require "rspec/collapsing_formatter/symbols"
 require "rspec/collapsing_formatter/tree"
 require "rspec/collapsing_formatter/layout"
 require "rspec/collapsing_formatter/stream_output"
+require "rspec/collapsing_formatter/live_output"
 
 module RSpec
   # A documentation-style formatter that collapses finished example groups.
@@ -19,12 +20,19 @@ module RSpec
 
     Core::Formatters.register self,
                               :example_group_started, :example_group_finished,
-                              :example_started, :example_passed, :example_failed, :example_pending
+                              :example_started, :example_passed, :example_failed, :example_pending,
+                              :start_dump
 
     def initialize(output)
       super
       @tree = Tree.new
-      @renderer = StreamOutput.new(output, Symbols.for(output))
+      symbols = Symbols.for(output)
+      @renderer =
+        if LiveOutput.supported?(output)
+          LiveOutput.new(output, symbols, @tree)
+        else
+          StreamOutput.new(output, symbols)
+        end
       @failure_count = 0
     end
 
@@ -34,11 +42,13 @@ module RSpec
     end
 
     def example_group_finished(_notification)
-      @tree.group_finished
+      group = @tree.group_finished
+      @renderer.group_finished(group, @tree.depth)
     end
 
     def example_started(notification)
-      @tree.example_started(notification.example.description.strip)
+      example = @tree.example_started(notification.example.description.strip)
+      @renderer.example_started(example, @tree.depth)
     end
 
     def example_passed(notification)
@@ -53,6 +63,12 @@ module RSpec
     def example_pending(notification)
       example = notification.example
       example_finished(example, :pending, "PENDING: #{example.execution_result.pending_message}")
+    end
+
+    # Called before RSpec's failure, pending and summary output, which is then
+    # appended below the tree by the inherited dump methods.
+    def start_dump(_notification)
+      @renderer.finish
     end
 
     private

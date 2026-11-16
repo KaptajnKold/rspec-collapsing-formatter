@@ -180,4 +180,78 @@ RSpec.describe RSpec::CollapsingFormatter do
       TEXT
     end
   end
+
+  context "with an interactive terminal" do
+    let(:tty) { FakeTTY.new(rows: 30, columns: 80) }
+
+    before { stub_const("ENV", ENV.to_h.merge("TERM" => "xterm-256color")) }
+
+    # The tree part of the screen: everything above RSpec's pending/failure/summary dump.
+    def tree_on_screen
+      tty.terminal.transcript.take_while { |line| !line.match?(/\A(Pending:|Failures:|Finished in)/) }
+    end
+
+    it "redraws the tree as examples run and groups finish" do
+      snapshots = []
+      screen = -> { snapshots << tty.terminal.lines }
+
+      run_suite(output: tty) do
+        RSpec.describe("User") do
+          context("when active") do
+            it("is valid") { screen.call }
+            it("can log in") { expect(1).to eq(1) }
+          end
+          context("when suspended") do
+            it("is invalid") { screen.call }
+          end
+        end
+        RSpec.describe("Auction") do
+          it("accepts bids") { screen.call }
+        end
+      end
+
+      expect(snapshots).to eq([
+                                ["", "User", "  when active", "    ▸ is valid"],
+                                ["", "User", "  ✓ when active (2 examples)", "  when suspended", "    ▸ is invalid"],
+                                ["", "✓ User (3 examples)", "", "Auction", "  ▸ accepts bids"]
+                              ])
+      expect(tree_on_screen).to eq(["", "✓ User (3 examples)", "✓ Auction (1 example)", ""])
+    end
+
+    it "keeps failed groups expanded and prints RSpec's failure output below the tree" do
+      run_suite(output: tty) do
+        RSpec.describe("User") do
+          context("when active") do
+            it("is valid") { expect(1).to eq(1) }
+          end
+          context("when suspended") do
+            it("cannot log in") { expect(:logged_in).to eq(:rejected) }
+            it "sends a notice"
+          end
+        end
+      end
+
+      expect(tree_on_screen).to eq([
+                                     "",
+                                     "✗ User (1 passed, 1 failed, 1 pending)",
+                                     "  ✓ when active (1 example)",
+                                     "  ✗ when suspended (1 failed, 1 pending)",
+                                     "    ✗ cannot log in (FAILED - 1)",
+                                     "    • sends a notice (PENDING: Not yet implemented)",
+                                     ""
+                                   ])
+      expect(tty.terminal.transcript).to include("  1) User when suspended cannot log in")
+      expect(tty.terminal.transcript).to include("3 examples, 1 failure, 1 pending")
+    end
+
+    it "uses append-only output when TERM is dumb" do
+      stub_const("ENV", ENV.to_h.merge("TERM" => "dumb"))
+
+      output = run_suite(output: tty) do
+        RSpec.describe("User") { it("is valid") { expect(1).to eq(1) } }
+      end
+
+      expect(progress_output(output)).to eq("\nUser\n  ✓ is valid\n\n")
+    end
+  end
 end

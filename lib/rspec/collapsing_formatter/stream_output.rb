@@ -2,14 +2,15 @@
 
 module RSpec
   class CollapsingFormatter < Core::Formatters::BaseTextFormatter
-    # Append-only output for non-interactive destinations (files, pipes, CI logs).
+    # Append-only output for pipes, files and CI logs.
     #
-    # Mirrors RSpec's documentation formatter: a group header when a group starts and
+    # Writes documentation-style lines as events arrive: a header when a group starts,
     # one line per example when it finishes. Never emits cursor-control sequences;
     # color is applied only through RSpec's ConsoleCodes, which honours --color settings.
     class StreamOutput
       def initialize(output, symbols)
         @output = output
+        @symbols = symbols
         @layout = Layout.new(symbols)
       end
 
@@ -22,11 +23,15 @@ module RSpec
         write(@layout.example_line(example, depth))
       end
 
+      # Nothing is shown for these events: lines are only ever appended.
+      def group_finished(_group, _depth); end
+      def example_started(_example, _depth); end
+      def finish; end
+
       private
 
       def write(line)
-        text = line.style ? Core::Formatters::ConsoleCodes.wrap(line.text, line.style) : line.text
-        @output.puts(line.indent + text)
+        @output.puts(@symbols.paint(line))
       end
     end
   end
