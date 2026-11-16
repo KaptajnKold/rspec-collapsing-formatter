@@ -18,13 +18,13 @@ module RSpec
     # that one line always occupies exactly one terminal row.
     class Layout
       # `indent` and `text` are plain strings; `style` is a ConsoleCodes color role or nil.
-      Line = Struct.new(:indent, :text, :style) do
+      # `node` is the group or example the line shows (nil for a blank separator).
+      Line = Struct.new(:indent, :text, :style, :node) do
         def to_s
           indent + text
         end
       end
 
-      BLANK = Line.new("", "", nil).freeze
       INDENT = "  "
 
       def initialize(symbols, width: nil)
@@ -42,10 +42,30 @@ module RSpec
           group_lines = group_lines(group)
           next if group_lines.empty?
 
-          lines << BLANK if previous && (expanded?(previous) || expanded?(group))
+          lines << Line.new("", "", nil, nil) if previous && (expanded?(previous) || expanded?(group))
           lines.concat(group_lines)
           previous = group
         end
+      end
+
+      # The lines from `node` to the end of its top-level group, as they appear in
+      # `lines`, without laying out anything before `node`: the node's own lines, then
+      # its following siblings, then those of each ancestor. Groups after the top-level
+      # group are not included.
+      def lines_from(node)
+        depth = node.depth
+        lines = node_lines(node, depth)
+        while (parent = node.parent)
+          parent.children[(node.index + 1)..].each { |sibling| lines.concat(node_lines(sibling, depth)) }
+          node = parent
+          depth -= 1
+        end
+        lines
+      end
+
+      # Whether a finished group is shown as a single summary line, or not at all.
+      def hides_children?(group)
+        %i[passed pending empty].include?(group.status)
       end
 
       def group_lines(group, depth = 0)
@@ -58,24 +78,26 @@ module RSpec
 
       def header_line(group, depth)
         status = group.status
-        return line(depth, group.description, nil) if status == :running
+        return line(depth, group.description, nil, group) if status == :running
 
         text = "#{@symbols.glyph(status)} #{group.description} (#{summary(group.counts)})"
-        line(depth, text, @symbols.style(status))
+        line(depth, text, @symbols.style(status), group)
       end
 
       def example_line(example, depth)
         text = "#{@symbols.glyph(example.status)} #{example.description}"
         text += " (#{example.detail})" if example.detail
-        line(depth, text, @symbols.style(example.status))
+        line(depth, text, @symbols.style(example.status), example)
       end
 
       private
 
       def children_lines(group, depth)
-        group.children.flat_map do |child|
-          child.is_a?(GroupNode) ? group_lines(child, depth) : [example_line(child, depth)]
-        end
+        group.children.flat_map { |child| node_lines(child, depth) }
+      end
+
+      def node_lines(node, depth)
+        node.is_a?(GroupNode) ? group_lines(node, depth) : [example_line(node, depth)]
       end
 
       def expanded?(group)
@@ -94,14 +116,20 @@ module RSpec
         end
       end
 
-      def line(depth, text, style)
+      def line(depth, text, style, node)
         indent = INDENT * depth
-        text = truncate(text, @width - 1 - indent.length) if @width
-        Line.new(indent, text, style)
+        if @width
+          max_width = [@width - 1, 0].max
+          indent = indent[0, max_width]
+          text = truncate(text, max_width - indent.length)
+        end
+        Line.new(indent, text, style, node)
       end
 
       def truncate(text, max_width)
-        return text if Unicode::DisplayWidth.of(text) <= max_width
+        # No character is wider than its UTF-8 encoding is long, so this skips measuring
+        # the common short line.
+        return text if text.bytesize <= max_width || Unicode::DisplayWidth.of(text) <= max_width
 
         room = max_width - Unicode::DisplayWidth.of(@symbols.ellipsis)
         return "" if room.negative?

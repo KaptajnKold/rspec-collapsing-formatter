@@ -17,9 +17,27 @@ module RSpec
       end
     end
 
+    # Position of a node in the tree: its parent group (nil at the top level) and its
+    # index among its siblings.
+    module TreePosition
+      attr_reader :parent, :index
+
+      def attach(parent, index)
+        @parent = parent
+        @index = index
+        self
+      end
+
+      def depth
+        parent ? parent.depth + 1 : 0
+      end
+    end
+
     # An example in the tree. Its status is :running until it finishes as
     # :passed, :failed or :pending; `detail` holds e.g. "FAILED - 1".
     class ExampleNode
+      include TreePosition
+
       attr_reader :description, :status, :detail
 
       def initialize(description)
@@ -45,6 +63,8 @@ module RSpec
 
     # An example group in the tree, with its child groups and examples in run order.
     class GroupNode
+      include TreePosition
+
       attr_reader :description, :children
 
       def initialize(description)
@@ -61,9 +81,10 @@ module RSpec
         @finished
       end
 
-      # Counts of finished examples in this group and all nested groups.
+      # Counts of finished examples in this group and all nested groups. Fixed once the
+      # group has finished, so it is computed only once from then on.
       def counts
-        children.map(&:counts).reduce(Counts.zero, :+)
+        @counts || children.map(&:counts).reduce(Counts.zero, :+).tap { |counts| @counts = counts if finished? }
       end
 
       # :running until finished; then :failed, :pending or :passed by the worst
@@ -99,8 +120,7 @@ module RSpec
       end
 
       def group_started(description)
-        group = GroupNode.new(description)
-        (@open_groups.last&.children || @groups) << group
+        group = add(GroupNode.new(description), @open_groups.last)
         @open_groups.push(group)
         group
       end
@@ -110,9 +130,7 @@ module RSpec
       end
 
       def example_started(description)
-        @current_example = ExampleNode.new(description)
-        @open_groups.last.children << @current_example
-        @current_example
+        @current_example = add(ExampleNode.new(description), @open_groups.last)
       end
 
       def example_finished(description, status, detail = nil)
@@ -120,6 +138,14 @@ module RSpec
         @current_example = nil
         example.finish(status, detail, description: description)
         example
+      end
+
+      private
+
+      def add(node, parent)
+        siblings = parent ? parent.children : @groups
+        siblings << node.attach(parent, siblings.size)
+        node
       end
     end
   end

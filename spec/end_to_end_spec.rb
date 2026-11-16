@@ -82,4 +82,13 @@ RSpec.describe "Running rspec with the collapsing formatter" do
     expect(transcript).to include("1) User when suspended cannot log in")
     expect(transcript).to include("5 examples, 1 failure, 1 pending")
   end
+
+  it "stays readable in a terminal shorter than the tree" do
+    terminal, status = run_rspec_in_terminal(rows: 5)
+
+    expect(status.exitstatus).to eq(1)
+    expect(terminal.transcript.count("    ✗ cannot log in (FAILED - 1)")).to eq(1)
+    expect(terminal.transcript.join("\n")).not_to include("▸")
+    expect(terminal.transcript).to include("5 examples, 1 failure, 1 pending")
+  end
 end

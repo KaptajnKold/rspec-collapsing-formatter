@@ -19,6 +19,21 @@ RSpec.describe RSpec::CollapsingFormatter::Tree do
     expect(user.children.first.children.map(&:description)).to eq(["is valid"])
   end
 
+  it "records each node's parent, index among its siblings and depth" do
+    user = tree.group_started("User")
+    active = tree.group_started("when active")
+    example = tree.example_started("is valid")
+    tree.example_finished("is valid", :passed)
+    tree.group_finished
+    tree.group_finished
+    auction = tree.group_started("Auction")
+
+    expect([user.parent, user.index, user.depth]).to eq([nil, 0, 0])
+    expect([active.parent, active.index, active.depth]).to eq([user, 0, 1])
+    expect([example.parent, example.index, example.depth]).to eq([active, 0, 2])
+    expect([auction.parent, auction.index]).to eq([nil, 1])
+  end
+
   it "tracks depth as groups open and close" do
     expect { tree.group_started("User") }.to change(tree, :depth).from(0).to(1)
     expect { tree.group_started("when active") }.to change(tree, :depth).to(2)

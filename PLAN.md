@@ -108,14 +108,27 @@ at the bottom.
   one appended line. Each frame is written with a single `write` call and never uses a
   full-screen clear, so it does not flicker. Optionally wrap frames in synchronized-output
   mode (DEC 2026).
-- **Early commit.** A finished failed subtree can never change, and nothing above it can
-  either, because ancestors containing a failure never collapse. Everything up to the end
-  of the last finished failed subtree is committed, which keeps the live region small.
-- **Live region taller than the terminal.** Lines that scrolled off the top are committed
-  as-is. If a collapse would need to rewrite them, the summary line is appended instead.
+- **No early commit of failed subtrees.** The original idea was to commit everything up to
+  the end of a finished failed subtree. But the headers above it still change when their
+  groups finish (`User` becomes `✗ User (3 passed, 1 failed)`), so only finished
+  top-level groups are committed, plus whatever does not fit on the screen (below).
+- **Live region taller than the terminal.** The live region is limited to `rows - 1` lines,
+  since the cursor cannot reach rows that scrolled off the top. Lines above that are
+  committed as-is, and the live region then starts at the tree node on its first line.
+  If a group whose lines were committed collapses, its summary (and everything after it)
+  is appended below; a committed header keeps its running text if its group later fails.
   *(Documented simplification.)*
-- **Width** is re-read on every render (`IO#winsize`, then `$COLUMNS`, then 80).
-  Already-drawn lines are not reflowed after a resize. *(Documented simplification.)*
+- **Cost per event.** Only the live region is laid out (from its first node: following
+  siblings, then ancestors' following siblings), so a render costs about one screenful
+  regardless of group size. Finished groups cache their counts.
+- **Size** is re-read on every render (`IO#winsize`, then `$COLUMNS`/`$LINES`, then
+  80×24). Already-drawn lines are not reflowed after a resize, and shrinking the window
+  below the live region's height can garble it. *(Documented simplification.)*
+- **Interrupts.** On the first Ctrl-C, RSpec finishes the current example and dumps as
+  usual, so the tree is finalized normally; RSpec's "shutting down" message on `$stderr`
+  needs the output proxy below. A second Ctrl-C calls `exit!`; since the cursor is always
+  on a fresh line and never hidden, the terminal is left usable. `close` also finishes the
+  live region in case `start_dump` is never reached.
 - **Output from specs while they run.** In live mode only, `$stdout` and `$stderr` are
   wrapped in a thin proxy during the run. On write, it clears the live region, passes the
   text through, then redraws the live region below it, so stray output appears above the
@@ -154,7 +167,7 @@ at the bottom.
 1. Skeleton: gemspec, `.rspec`, formatter registered, append-only mode working end to end.
 2. Tree and layout, with collapse rules and counts, plus unit tests.
 3. Live output: diff redraw, virtual terminal, collapse on group finish.
-4. Robustness: early commit, regions taller than the screen, truncation, Ctrl-C and
+4. Robustness: regions taller than the screen, cost per event, truncation, Ctrl-C and
    `--fail-fast` cleanup.
 5. Stray-output proxy and `message` handling.
 6. README: usage, screenshots, documented simplifications.

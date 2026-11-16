@@ -71,6 +71,13 @@ module RSpec
       @renderer.finish
     end
 
+    # Also finishes the output when the run ends without reaching start_dump.
+    # Finishing twice is harmless.
+    def close(notification)
+      @renderer.finish
+      super
+    end
+
     private
 
     # Descriptions are read again on finish: RSpec generates descriptions for

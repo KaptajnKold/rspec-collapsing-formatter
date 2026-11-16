@@ -244,6 +244,20 @@ RSpec.describe RSpec::CollapsingFormatter do
       expect(tty.terminal.transcript).to include("3 examples, 1 failure, 1 pending")
     end
 
+    it "shows where the run stopped with --fail-fast, hiding groups that never ran" do
+      run_suite(output: tty, fail_fast: 1) do
+        RSpec.describe("User") do
+          it("is valid") { expect(1).to eq(1) }
+          it("can log in") { expect(1).to eq(2) }
+          it("is never run") { expect(1).to eq(1) }
+        end
+        RSpec.describe("Auction") { it("is never run") { expect(1).to eq(1) } }
+      end
+
+      expect(tree_on_screen).to eq(["", "✗ User (1 passed, 1 failed)", "  ✓ is valid", "  ✗ can log in (FAILED - 1)", ""])
+      expect(tty.terminal.transcript).to include("2 examples, 1 failure")
+    end
+
     it "uses append-only output when TERM is dumb" do
       stub_const("ENV", ENV.to_h.merge("TERM" => "dumb"))
 

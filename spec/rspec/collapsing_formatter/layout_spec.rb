@@ -181,6 +181,31 @@ RSpec.describe RSpec::CollapsingFormatter::Layout do
     end
   end
 
+  it "never writes past the width, even when the indent alone is too wide" do
+    build({ "a" => { "b" => { "c" => { "d" => { "is valid" => nil } } } } }, running: %w[a b c d])
+
+    expect(render(width: 6)).to eq(["a", "  b", "    c", "     ", "     "])
+  end
+
+  describe "#lines_from" do
+    it "lays out from a node to the end of its top-level group, as in the full layout" do
+      build({ "User" => {
+              "when active" => { "is valid" => :passed, "can log in" => :failed },
+              "has a name" => :passed,
+              "when suspended" => { "is invalid" => nil }
+            } }, running: ["User", "when suspended"])
+      layout = described_class.new(symbols)
+      all = layout.lines(tree.groups)
+      user = tree.groups.first
+
+      [user, user.children[0], user.children[0].children[1], user.children[1], user.children[2].children[0]]
+        .each do |node|
+          from = layout.lines_from(node)
+          expect(from.map(&:to_s)).to eq(all.drop(all.index { |line| line.node.equal?(node) }).map(&:to_s))
+        end
+    end
+  end
+
   context "with ASCII symbols" do
     let(:symbols) { RSpec::CollapsingFormatter::Symbols.new(RSpec::CollapsingFormatter::Symbols::ASCII) }
 

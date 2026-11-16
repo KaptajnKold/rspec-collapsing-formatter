@@ -202,6 +202,104 @@ RSpec.describe RSpec::CollapsingFormatter::LiveOutput do
     end
   end
 
+  describe "a live region taller than the terminal" do
+    let(:tty) { FakeTTY.new(rows: 6, columns: 40) }
+
+    def max_cursor_up
+      tty.writes.join.scan(/\e\[(\d+)A/).flatten.map(&:to_i).max
+    end
+
+    it "commits lines that do not fit, never moving the cursor above the screen" do
+      start_group("User")
+      8.times { |index| run_example("example #{index}") }
+      start_example("example 8")
+
+      expect(max_cursor_up).to be <= 5
+      expect(tty.terminal.transcript).to eq(["", "User", *(0..7).map { |index| "  ✓ example #{index}" }, "  ▸ example 8"])
+    end
+
+    it "appends a group's summary when some of its lines were already committed" do
+      start_group("User")
+      start_group("when active")
+      8.times { |index| run_example("example #{index}") }
+      finish_group
+      start_group("when suspended")
+      start_example("is invalid")
+
+      expect(tty.terminal.transcript).to eq([
+                                              "", "User", "  when active",
+                                              "    ✓ example 0", "    ✓ example 1", "    ✓ example 2",
+                                              "  ✓ when active (8 examples)", "  when suspended", "    ▸ is invalid"
+                                            ])
+
+      finish_example("is invalid")
+      finish_group
+      finish_group
+
+      expect(tty.terminal.transcript.last(2)).to eq(["    ✓ example 2", "✓ User (9 examples)"])
+      expect(max_cursor_up).to be <= 5
+    end
+
+    it "leaves a committed header unchanged when its group fails" do
+      start_group("User")
+      7.times { |index| run_example("example #{index}") }
+      run_example("breaks", :failed, "FAILED - 1")
+      finish_group
+
+      expect(tty.terminal.transcript).to eq(["", "User", *(0..6).map { |index| "  ✓ example #{index}" },
+                                             "  ✗ breaks (FAILED - 1)"])
+    end
+
+    it "removes the live lines of nested groups that turn out empty" do
+      start_group("User")
+      8.times { |index| start_group("context #{index}") }
+
+      expect(screen.last).to eq("                context 7")
+
+      9.times { finish_group }
+
+      # The headers that had scrolled out of reach stay; the rest are erased.
+      expect(tty.terminal.transcript).to eq(["", "User", "  context 0", "    context 1", "      context 2"])
+      expect(max_cursor_up).to be <= 5
+    end
+
+    it "lays out only the live region, however many lines were committed" do
+      start_group("User")
+      300.times { |index| run_example("example #{index}") }
+
+      calls = 0
+      allow_any_instance_of(RSpec::CollapsingFormatter::Layout).to receive(:example_line)
+        .and_wrap_original { |original, *args| calls += 1; original.call(*args) }
+      run_example("example 300")
+
+      # Two renders (example started and finished), each at most one screenful.
+      expect(calls).to be <= 2 * tty.terminal.rows
+    end
+
+    it "falls back to $LINES when the terminal size is unknown" do
+      output = StringIO.new(+"")
+      live = described_class.new(output, symbols, tree, env: { "LINES" => "4" })
+      live.group_started(tree.group_started("User"), 0)
+      6.times do |index|
+        live.example_started(tree.example_started("example #{index}"), 1)
+        live.example_finished(tree.example_finished("example #{index}", :passed), 1)
+      end
+
+      expect(output.string.scan(/\e\[(\d+)A/).flatten.map(&:to_i).max).to be <= 3
+    end
+  end
+
+  it "writes nothing when finished twice" do
+    start_group("User")
+    run_example("is valid")
+    live.finish
+    tty.writes.clear
+
+    live.finish
+
+    expect(tty.writes).to be_empty
+  end
+
   it "leaves the screen as it is on finish, with the cursor on a fresh line" do
     start_group("User")
     start_example("is valid") # e.g. interrupted

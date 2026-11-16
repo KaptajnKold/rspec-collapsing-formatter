@@ -6,9 +6,10 @@ require "rspec/core/sandbox"
 module FormatterHelpers
   # Runs the example groups defined in the block in an isolated RSpec world, with
   # only the collapsing formatter attached, and returns everything it wrote.
-  def run_suite(color: false, output: StringIO.new, &definition)
+  def run_suite(color: false, output: StringIO.new, **configuration, &definition)
     RSpec::Core::Sandbox.sandboxed do |config|
       config.color_mode = color ? :on : :off
+      configuration.each { |option, value| config.public_send(:"#{option}=", value) }
       config.add_formatter(RSpec::CollapsingFormatter, output)
       definition.call
       options = RSpec::Core::ConfigurationOptions.new([])
