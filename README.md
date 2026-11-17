@@ -1,261 +1,186 @@
-# RSpec Collapsing Documentation Formatter
+# rspec-collapsing-formatter
 
-Implement an RSpec formatter that behaves like RSpec's built-in `documentation` formatter, but dynamically collapses completed example groups.
+An RSpec formatter that works like the built-in `documentation` formatter, but collapses
+each example group into a one-line summary as soon as it finishes. Failures stay expanded.
 
-## Goal
+While the suite runs you can see exactly which group and example RSpec is executing, but
+finished work no longer takes up one line per example.
 
-The formatter should preserve the main benefit of RSpec's documentation formatter: while the suite is running, it should be easy to see **which spec and context RSpec is currently executing**.
+## What it looks like
 
-Unlike the documentation formatter, completed contexts should not continue occupying one line per example. Once an example group has finished, replace its expanded output with a single summary line.
+While a suite is running, the current group is expanded as in the documentation
+formatter, and `▸` marks the example that is running:
 
-The result should feel like a live, hierarchical view of the test suite rather than an append-only log.
+```text
+User
+  ✓ when active (3 examples)
+  when suspended
+    ✓ is invalid
+    ▸ cannot log in
+```
 
-## Desired behavior
+Finished groups collapse to a summary line. A group with a failure stays expanded, so the
+failed example is shown in context; its successful subgroups still collapse:
 
-While an example group is running, display its hierarchy and examples similarly to the documentation formatter.
+```text
+✗ User (4 passed, 1 failed, 1 pending)
+  ✓ when active (3 examples)
+  ✗ when suspended (1 passed, 1 failed, 1 pending)
+    ✓ is invalid
+    ✗ cannot log in (FAILED - 1)
+    • sends a notice (PENDING: mailer not wired up)
+audit: bid of 90 rejected
 
-For example:
+✓ Auction (3 examples)
+```
+
+(`audit: …` was printed by a spec. See [Output from specs](#output-from-specs).)
+
+RSpec's usual pending, failure and summary output then follows, unchanged:
+
+```text
+Failures:
+
+  1) User when suspended cannot log in
+     Failure/Error: it("cannot log in") { expect(:logged_in).to eq(:rejected) }
+
+       expected: :rejected
+            got: :logged_in
+     …
+
+9 examples, 1 failure, 1 pending
+```
+
+The `(FAILED - n)` numbers match the numbers in that failure list.
+
+## Installation
+
+The gem is not published to RubyGems yet. Add it to your Gemfile from a checkout:
+
+```ruby
+group :test do
+  gem "rspec-collapsing-formatter", path: "path/to/rspec-collapsing-formatter"
+end
+```
+
+It requires Ruby 3.1 or later (developed on 3.4) and rspec-core 3.10 or later (tested
+with 3.13). Its only other dependency is `unicode-display_width` (2.4 up to 4), to
+measure line widths.
+
+## Usage
+
+```sh
+bundle exec rspec --format RSpec::CollapsingFormatter
+```
+
+No `--require` is needed: RSpec loads the formatter from its constant name. To make it the
+default, add this to `.rspec`:
+
+```text
+--format RSpec::CollapsingFormatter
+```
+
+## Display
+
+| Line | Meaning |
+|---|---|
+| `▸ description` | Example currently running |
+| `✓ description` | Passed example |
+| `✗ description (FAILED - 1)` | Failed example, numbered as in RSpec's failure list |
+| `• description (PENDING: reason)` | Pending or skipped example |
+| `✓ group (3 examples)` | Finished group in which everything passed |
+| `• group (6 passed, 1 pending)` | Finished group with pending examples but no failures; collapsed, in yellow |
+| `✗ group (1 passed, 1 failed)` | Finished group with a failure; stays expanded |
+
+- Counts include examples in nested groups.
+- Groups in which no examples ran, e.g. because of filters or `--fail-fast`, are hidden.
+- Collapsed top-level groups are listed one after another. A blank line separates a
+  top-level group from its neighbors when either of them is expanded.
+- If the output encoding is not UTF-8, the symbols fall back to `+`, `x`, `*`, `>` and
+  `...`.
+- Colors follow RSpec's color settings (`--color`, `--no-color`, `--force-color`) and
+  roles (`success_color`, `failure_color`, `pending_color`, `detail_color`).
+
+## Interactive and non-interactive output
+
+When the output is a terminal (and `TERM` is not `dumb`), the formatter redraws the tree in
+place. It rewrites only the lines that changed, without clearing the screen, so it does
+not flicker. Typically that is one line per example, plus a few when a group collapses.
+Lines are cut to the terminal width with `…`, so a long description never wraps; the full
+description is still shown in RSpec's failure output.
+
+When the output is redirected to a file, piped, or not a terminal for any other reason,
+the formatter falls back to append-only output in the style of the documentation
+formatter, and never writes cursor-control sequences:
 
 ```text
 User
   when active
-    is valid
-    can log in
-    receives notifications
+    ✓ is valid
+    ✓ can log in
+    ✓ receives notifications
   when suspended
-    is invalid
-    cannot log in
-```
-
-As soon as `when active` has completed successfully, collapse it:
-
-```text
-User
-  ✓ when active (3 examples)
-  when suspended
-    is invalid
-    cannot log in
-```
-
-When `when suspended` completes:
-
-```text
-User
-  ✓ when active (3 examples)
-  ✓ when suspended (2 examples)
-```
-
-When the entire top-level group completes:
-
-```text
-✓ User (5 examples)
-```
-
-The next top-level group can then expand beneath it:
-
-```text
-✓ User (5 examples)
-
-Auction
-  bidding
-    accepts a higher bid
-    rejects a lower bid
-    ...
-```
-
-Completed top-level groups may remain as single summary lines and naturally scroll off the terminal as the suite progresses.
-
-## Failures
-
-Successful groups should collapse aggressively.
-
-Failures should remain visible.
-
-For example:
-
-```text
-User
-  ✓ when active (3 examples)
-  ✗ when suspended
     ✓ is invalid
-    ✗ cannot log in
+    ✗ cannot log in (FAILED - 1)
+    • sends a notice (PENDING: mailer not wired up)
 ```
 
-The formatter should retain enough information for the developer to immediately see:
+Nothing collapses in this mode, so a log of a hung CI job still shows where it stopped.
 
-- which example failed;
-- the hierarchy containing it;
-- the normal RSpec failure information.
+## Output from specs
 
-Do not sacrifice useful RSpec diagnostics merely to keep the display compact.
+In interactive mode, `$stdout` and `$stderr` are replaced by thin proxies for the duration
+of the run. Anything a spec writes there, via `puts`, `warn`, a logger and so on, is printed
+above the tree, and the tree is redrawn below it. RSpec's own messages, such as
+`Run options: …` or the notice printed on Ctrl-C, take the same path. A line printed
+without a newline (`print "."`) waits until the newline arrives or the next example
+starts or finishes.
 
-Use sensible judgment about exactly how failed groups collapse or remain expanded. The important principle is:
+The proxies pass everything else (`tty?`, `sync`, `winsize`, …) through to the real streams.
+The real streams are restored before RSpec prints its summary.
 
-> Successful work disappears into compact summaries; failures remain visible and understandable.
+## Limitations
 
-## Pending examples
+The first version makes these simplifying assumptions where terminal behavior gets
+complicated:
 
-Pending/skipped examples should be distinguishable from both successes and failures.
+- **Output that bypasses `$stdout`/`$stderr` can corrupt the tree.** That includes output
+  from subprocesses that write to the inherited file descriptors, and code that writes to
+  the `STDOUT`/`STDERR` constants. The next redraw then overwrites some of that output or
+  leaves stale lines behind.
+- **Groups taller than the terminal.** The cursor cannot move into rows that have scrolled
+  off the top, so those lines are final once they scroll away. If such a group later
+  collapses, its summary is printed below the lines that can no longer be changed. If it
+  fails, its header keeps its plain running text instead of `✗ … (counts)`.
+- **Resizing.** The terminal size is read on every redraw, but lines already drawn are not
+  reflowed. Making the window shorter than the expanded part of the tree can garble it
+  until the current top-level group finishes.
+- **Ctrl-C.** RSpec's first interrupt lets the current example finish, so its "shutting
+  down" notice appears after that example, and the tree is completed normally. A second
+  Ctrl-C makes RSpec exit immediately, which leaves the tree as it was, with the cursor
+  on a fresh line.
+- **Wide characters.** Emoji widths differ between versions of `unicode-display_width` and
+  between terminals. If they disagree, a line can be cut a little short, or in rare cases
+  wrap.
 
-A group containing pending examples should not misleadingly appear as an entirely successful group.
+## Development
 
-Choose an appropriate compact representation.
-
-## Live terminal behavior
-
-This is intentionally a dynamic terminal formatter.
-
-Use ANSI terminal capabilities to rewrite output that has already been displayed. When a context completes, remove/redraw its expanded representation and replace it with the collapsed representation.
-
-Avoid clearing the entire terminal on every update if possible. The output should not visibly flicker during a normal test run.
-
-The implementation should correctly account for:
-
-- nested example groups;
-- terminals of different widths;
-- long example descriptions;
-- output written while specs execute;
-- RSpec's final summary and failure output.
-
-It is acceptable for the first implementation to make reasonable simplifying assumptions where terminal behavior becomes complicated, provided those assumptions are documented.
-
-## Non-interactive output
-
-Dynamic cursor manipulation is inappropriate when output is redirected to a file, piped to another process, or otherwise not attached to an interactive terminal.
-
-Detect this situation where practical.
-
-In non-interactive mode, fall back to sensible append-only output. ANSI cursor-control sequences must not corrupt redirected output.
-
-Color should likewise respect RSpec's/color/TTY configuration rather than assuming ANSI color support.
-
-## RSpec integration
-
-Implement this using RSpec's formatter API rather than modifying RSpec itself.
-
-Relevant formatter notifications are likely to include events such as:
-
-- `example_group_started`
-- `example_group_finished`
-- `example_started`
-- `example_passed`
-- `example_failed`
-- `example_pending`
-- `start`
-- `start_dump`
-- `dump_failures`
-- `dump_pending`
-- `dump_summary`
-- `close`
-
-Do not assume this list is exhaustive or that all of these events must be used. Consult the current RSpec formatter API and use the smallest appropriate set.
-
-The formatter will probably need an in-memory representation of the currently executing group hierarchy so that it can redraw portions of the tree when groups finish.
-
-## Example counts
-
-Collapsed groups should show the number of examples they contain:
-
-```text
-✓ validations (7 examples)
+```sh
+bundle install
+bundle exec rspec
 ```
 
-Use singular grammar where appropriate:
+The design is described in [PLAN.md](PLAN.md), and the original brief is in
+[REQUIREMENTS.md](REQUIREMENTS.md). In short, RSpec events update a tree (`tree.rb`).
+`layout.rb` turns the tree into lines without any IO, and `live_output.rb` or
+`stream_output.rb` writes them. Only `live_output.rb` knows about cursor movement.
 
-```text
-✓ some context (1 example)
-```
+Most tests run without a real terminal. `spec/support/virtual_terminal.rb` is a small
+terminal emulator that interprets the bytes the formatter writes, so specs can assert on
+what would be visible on screen. It raises on any escape sequence it does not know. The
+end-to-end tests run RSpec in a subprocess, both through a pipe and under a real
+pseudo-terminal.
 
-Counts should include nested examples where that makes the hierarchy intuitive.
+## License
 
-If pending or failed examples make a single count ambiguous, a compact breakdown is acceptable, for example:
-
-```text
-✗ validations (6 passed, 1 failed)
-```
-
-The exact presentation can evolve during implementation.
-
-## Compatibility
-
-Target the current RSpec 3.x formatter API.
-
-Avoid depending unnecessarily on RSpec internals. Prefer public formatter APIs so that the formatter has a reasonable chance of continuing to work across RSpec releases.
-
-The formatter should be usable in the normal RSpec way, e.g.:
-
-```text
-rspec --format SomeFormatter
-```
-
-and via `.rspec`.
-
-## Scope
-
-Start small.
-
-The first useful version needs to:
-
-1. display the currently executing hierarchy;
-2. display examples as they execute;
-3. collapse successful groups when they finish;
-4. preserve failed examples/groups;
-5. show RSpec's normal useful failure information and final summary;
-6. avoid emitting terminal-control garbage when output is non-interactive.
-
-Do **not** build a full-screen TUI, interactive controls, keyboard handling, configuration framework, or elaborate theming system.
-
-This should remain recognizably an **RSpec formatter**, just one that takes advantage of a modern terminal.
-
-## Tests
-
-Add automated tests for the formatter.
-
-At minimum, cover:
-
-- a successful top-level group;
-- nested successful groups;
-- multiple sibling contexts;
-- failed examples;
-- pending examples;
-- mixed success/failure within a group;
-- singular/plural example counts;
-- non-TTY output.
-
-Keep terminal rendering logic sufficiently separated from RSpec event handling that it can be tested without requiring a real interactive terminal for every case.
-
-Where useful, model rendering as transformations from formatter state to terminal output rather than coupling all state changes directly to `$stdout`.
-
-## Design preference
-
-Favor a small design with clear responsibilities.
-
-A likely separation is:
-
-```text
-RSpec events
-    ↓
-formatter/state
-    ↓
-tree of groups/examples
-    ↓
-renderer
-    ↓
-terminal output
-```
-
-This is a suggestion rather than a required class structure.
-
-In particular, avoid spreading ANSI cursor bookkeeping throughout the RSpec event-handling code.
-
-## UX principle
-
-The formatter should answer two questions at a glance while a suite is running:
-
-**What has already completed?**
-
-and, more importantly:
-
-**What is RSpec doing right now?**
-
-RSpec's documentation formatter already answers the second question well, but becomes increasingly noisy as the suite progresses. This formatter should retain that contextual information while progressively compressing completed work.
+MIT.

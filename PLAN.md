@@ -1,6 +1,6 @@
 # Implementation Plan: RSpec Collapsing Documentation Formatter
 
-See `README.md` for the requirements. This document describes how we intend to meet them.
+See `REQUIREMENTS.md` for the requirements. This document describes how we meet them.
 
 ## 1. Project shape
 
