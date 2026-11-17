@@ -183,4 +183,4 @@ pseudo-terminal.
 
 ## License
 
-MIT.
+MIT. See [LICENSE](LICENSE).
