@@ -134,8 +134,14 @@ at the bottom.
   text through, then redraws the live region below it, so stray output appears above the
   tree. Partial lines are buffered until a newline arrives or the next event fires. The
   proxy delegates everything else (`tty?`, `sync`, …). RSpec `message` notifications use
-  the same path. Output that subprocesses write directly to the file descriptor cannot be
-  intercepted. *(Documented simplification.)*
+  the same path. Output that subprocesses write directly to the file descriptor (or code
+  writes through the `STDOUT`/`STDERR` constants) cannot be intercepted. *(Documented
+  simplification.)*
+  - Only streams that are terminals are proxied; they are restored at `start_dump`/`close`
+    unless something else replaced them in the meantime.
+  - Writes and renders share a mutex, since specs may write from other threads.
+  - Signal handlers cannot take locks, and may interrupt a render. Text written from one
+    (RSpec's "shutting down" message on Ctrl-C) is queued and printed at the next event.
 
 ## 6. Non-interactive output (`stream_output.rb`)
 

@@ -18,6 +18,17 @@ module FormatterHelpers
     output.string
   end
 
+  # Points $stdout and $stderr at `io` for the duration of the block.
+  def with_standard_streams(io)
+    stdout = $stdout
+    stderr = $stderr
+    $stdout = $stderr = io
+    yield
+  ensure
+    $stdout = stdout
+    $stderr = stderr
+  end
+
   # The live part of the output: everything before RSpec's pending/failure/summary dump.
   def progress_output(output)
     output.split(/^(?:Pending:|Failures:|Finished in)/).first

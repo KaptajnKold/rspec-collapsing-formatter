@@ -31,7 +31,7 @@ class VirtualTerminal
   end
 
   def feed(data)
-    scanner = StringScanner.new(data.to_s)
+    scanner = StringScanner.new(data.to_s.scrub("\uFFFD")) # invalid bytes show as �, as in real terminals
     until scanner.eos?
       if scanner.scan(/\e\[([0-9;]*)([A-Za-z])/) then control(scanner[1], scanner[2])
       elsif scanner.scan(/\e/) then raise UnsupportedSequence, "escape sequence #{scanner.rest[0, 10].inspect}"

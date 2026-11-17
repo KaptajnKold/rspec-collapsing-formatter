@@ -23,7 +23,12 @@ module RSpec
         write(@layout.example_line(example, depth))
       end
 
+      def message(text)
+        @output.puts(text)
+      end
+
       # Nothing is shown for these events: lines are only ever appended.
+      def start; end
       def group_finished(_group, _depth); end
       def example_started(_example, _depth); end
       def finish; end

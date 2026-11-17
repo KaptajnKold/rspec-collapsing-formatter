@@ -17,16 +17,23 @@ RSpec.describe "Running rspec with the collapsing formatter" do
 
   # Runs RSpec in a child process attached to a pseudo-terminal of the given size and
   # returns everything it wrote, as interpreted by a VirtualTerminal.
-  def run_rspec_in_terminal(*args, rows: 40, columns: 100)
+  # With `interrupt_after`, sends SIGINT once that text has appeared in the output.
+  def run_rspec_in_terminal(*args, rows: 40, columns: 100, fixture: self.fixture, env: {}, interrupt_after: nil)
     output = +""
     status = PTY.open do |controller, child_tty|
       child_tty.winsize = [rows, columns]
-      pid = Process.spawn({ "SPEC_OPTS" => nil, "TERM" => "xterm-256color" }, *command(*args),
+      pid = Process.spawn({ "SPEC_OPTS" => nil, "TERM" => "xterm-256color", **env }, *command(*args, fixture: fixture),
                           in: child_tty, out: child_tty, err: child_tty,
                           chdir: File.join(root, "spec", "fixtures"))
       child_tty.close
       begin
-        loop { output << controller.readpartial(4096) }
+        loop do
+          output << controller.readpartial(4096)
+          if interrupt_after && output.include?(interrupt_after.b)
+            Process.kill("INT", pid)
+            interrupt_after = nil
+          end
+        end
       rescue EOFError, Errno::EIO
         # the child closed the terminal
       end
@@ -38,11 +45,11 @@ RSpec.describe "Running rspec with the collapsing formatter" do
     [terminal, status]
   end
 
-  def command(*args)
+  def command(*args, fixture: self.fixture)
     [
       Gem.ruby, "-I", File.join(root, "lib"),
       "-e", "require 'rspec/core'; exit RSpec::Core::Runner.run(ARGV)", "--",
-      fixture, "--format", "RSpec::CollapsingFormatter", *args
+      fixture, "--format", "RSpec::CollapsingFormatter", "--order", "defined", *args
     ]
   end
 
@@ -90,5 +97,30 @@ RSpec.describe "Running rspec with the collapsing formatter" do
     expect(terminal.transcript.count("    ✗ cannot log in (FAILED - 1)")).to eq(1)
     expect(terminal.transcript.join("\n")).not_to include("▸")
     expect(terminal.transcript).to include("5 examples, 1 failure, 1 pending")
+  end
+
+  context "with examples that write to $stdout and $stderr" do
+    let(:noisy_fixture) { File.join(root, "spec", "fixtures", "noisy_suite.rb") }
+
+    it "prints their output above the tree" do
+      terminal, status = run_rspec_in_terminal(fixture: noisy_fixture)
+
+      expect(status.exitstatus).to eq(0)
+      expect(terminal.transcript.take(5)).to eq(["", "reading users.csv", "row 3: missing email", "skipped 1 row",
+                                                 "✓ Importer (4 examples)"])
+    end
+
+    it "finishes cleanly on Ctrl-C, keeping RSpec's message above the tree" do
+      terminal, status = run_rspec_in_terminal(fixture: noisy_fixture, env: { "SLOW_EXAMPLE_SECONDS" => "1" },
+                                               interrupt_after: "▸ takes a while")
+
+      expect(status.exitstatus).to eq(1)
+      transcript = terminal.transcript.join("\n")
+      expect(transcript).to include("RSpec is shutting down")
+      expect(transcript).to match(/Interrupt again to force quit.*\n✓ Importer \(3 examples\)\n/m)
+      expect(transcript).not_to include("▸")
+      expect(transcript).not_to include("  ✓ reads the rows") # no stale expanded lines
+      expect(transcript).to include("3 examples, 0 failures")
+    end
   end
 end

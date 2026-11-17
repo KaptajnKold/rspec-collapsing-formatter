@@ -289,6 +289,130 @@ RSpec.describe RSpec::CollapsingFormatter::LiveOutput do
     end
   end
 
+  describe "output from specs" do
+    let(:proxy) { RSpec::CollapsingFormatter::StrayOutput.new(tty, live) }
+
+    before do
+      start_group("User")
+      run_example("is valid")
+      start_example("can log in")
+    end
+
+    it "prints complete lines above the live region" do
+      proxy.puts "connecting..."
+      proxy.puts "connected"
+
+      expect(screen).to eq(["", "connecting...", "connected", "User", "  ✓ is valid", "  ▸ can log in"])
+
+      finish_example("can log in")
+      finish_group
+
+      expect(screen).to eq(["", "connecting...", "connected", "✓ User (2 examples)"])
+    end
+
+    it "waits for the rest of a partial line until the next event" do
+      proxy.print "loading"
+      proxy.print "..."
+
+      expect(screen).to eq(["", "User", "  ✓ is valid", "  ▸ can log in"])
+
+      finish_example("can log in")
+
+      expect(screen).to eq(["", "loading...", "User", "  ✓ is valid", "  ✓ can log in"])
+    end
+
+    it "prints a partial line as soon as its newline arrives" do
+      proxy.print "loading"
+      proxy.print "...done\nnext"
+
+      expect(screen).to eq(["", "loading...done", "User", "  ✓ is valid", "  ▸ can log in"])
+    end
+
+    it "prints output written from a signal handler at the next event, without adding a newline" do
+      handled = false
+      stderr = proxy # memoized `let` takes a lock, which a signal handler cannot
+      previous_handler = trap("USR1") do
+        stderr.puts "RSpec is shutting down"
+        handled = true
+      end
+      begin
+        Process.kill("USR1", Process.pid)
+        sleep 0.01 until handled
+      ensure
+        trap("USR1", previous_handler)
+      end
+
+      expect(screen).to eq(["", "User", "  ✓ is valid", "  ▸ can log in"])
+
+      finish_example("can log in")
+
+      expect(screen).to eq(["", "RSpec is shutting down", "User", "  ✓ is valid", "  ✓ can log in"])
+    end
+
+    it "writes the text through the stream it was written to" do
+      other = FakeTTY.new
+      RSpec::CollapsingFormatter::StrayOutput.new(other, live).puts "on stderr"
+
+      expect(other.string).to eq("on stderr\n")
+      expect(tty.writes.last(2)).to eq(["\r\e[3A\e[J", "User\n  ✓ is valid\n  ▸ can log in\n"])
+    end
+
+    it "passes through bytes that are not valid UTF-8" do
+      proxy.write("caf\xE9\n".b)
+
+      expect(tty.string.b).to include("caf\xE9\n".b)
+      expect(screen.last).to eq("  ▸ can log in")
+    end
+
+    it "prints RSpec messages above the live region" do
+      live.message("Run options: include {:focus=>true}")
+
+      expect(screen).to eq(["", "Run options: include {:focus=>true}", "User", "  ✓ is valid", "  ▸ can log in"])
+    end
+  end
+
+  describe "capturing $stdout and $stderr" do
+    it "replaces terminal streams while running and restores them on finish" do
+      with_standard_streams(tty) do
+        live.start
+
+        expect($stdout).to be_a(RSpec::CollapsingFormatter::StrayOutput)
+        expect($stderr).to be_a(RSpec::CollapsingFormatter::StrayOutput)
+        start_group("User")
+        start_example("is valid")
+        puts "from puts"
+        warn "from warn"
+        $stdout.print "partial"
+        live.finish
+
+        expect($stdout).to be(tty)
+        expect($stderr).to be(tty)
+      end
+      expect(screen).to eq(["", "from puts", "from warn", "partial", "User", "  ▸ is valid"])
+    end
+
+    it "leaves streams that are not terminals alone" do
+      with_standard_streams(StringIO.new) do
+        live.start
+
+        expect($stdout).to be_a(StringIO)
+        live.finish
+      end
+    end
+
+    it "does not restore a stream that something else replaced in the meantime" do
+      replacement = StringIO.new
+      with_standard_streams(tty) do
+        live.start
+        $stdout = replacement
+        live.finish
+
+        expect($stdout).to be(replacement)
+        expect($stderr).to be(tty)
+      end
+    end
+  end
+
   it "writes nothing when finished twice" do
     start_group("User")
     run_example("is valid")

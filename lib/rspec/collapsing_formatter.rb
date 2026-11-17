@@ -6,6 +6,7 @@ require "rspec/collapsing_formatter/symbols"
 require "rspec/collapsing_formatter/tree"
 require "rspec/collapsing_formatter/layout"
 require "rspec/collapsing_formatter/stream_output"
+require "rspec/collapsing_formatter/stray_output"
 require "rspec/collapsing_formatter/live_output"
 
 module RSpec
@@ -19,6 +20,7 @@ module RSpec
     VERSION = "0.1.0"
 
     Core::Formatters.register self,
+                              :start, :message,
                               :example_group_started, :example_group_finished,
                               :example_started, :example_passed, :example_failed, :example_pending,
                               :start_dump
@@ -34,6 +36,16 @@ module RSpec
           StreamOutput.new(output, symbols)
         end
       @failure_count = 0
+    end
+
+    def start(notification)
+      super
+      @renderer.start
+    end
+
+    # RSpec messages (e.g. "Run options: ...") are printed above the live region.
+    def message(notification)
+      @renderer.message(notification.message)
     end
 
     def example_group_started(notification)

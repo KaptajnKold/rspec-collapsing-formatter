@@ -258,6 +258,29 @@ RSpec.describe RSpec::CollapsingFormatter do
       expect(tty.terminal.transcript).to include("2 examples, 1 failure")
     end
 
+    it "prints output from specs above the tree" do
+      snapshots = []
+      terminal = tty.terminal # `tty` is not defined inside the sandboxed examples
+      with_standard_streams(tty) do
+        run_suite(output: tty) do
+          RSpec.describe("User") do
+            it("is valid") do
+              puts "connecting to the database"
+              warn "deprecated: User.find_by_name"
+              snapshots << terminal.lines
+            end
+            it("can log in") { print "." }
+          end
+        end
+      end
+
+      expect(snapshots.first).to eq(["", "connecting to the database", "deprecated: User.find_by_name",
+                                     "User", "  ▸ is valid"])
+      expect(tree_on_screen).to eq(["", "connecting to the database", "deprecated: User.find_by_name", ".",
+                                    "✓ User (2 examples)", ""])
+      expect($stdout).not_to be_a(RSpec::CollapsingFormatter::StrayOutput)
+    end
+
     it "uses append-only output when TERM is dumb" do
       stub_const("ENV", ENV.to_h.merge("TERM" => "dumb"))
 

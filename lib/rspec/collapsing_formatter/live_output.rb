@@ -25,6 +25,12 @@ module RSpec
     # Committed lines can go stale: a group header keeps its running text if the group
     # later fails, and if a group whose lines were committed collapses, its summary and
     # everything after it is written below what is already on screen.
+    #
+    # While running, $stdout and $stderr (when they are terminals) are replaced by
+    # StrayOutput proxies. Complete lines written to them, and RSpec messages, are
+    # printed above the live region: it is cleared, the text is written through the
+    # original stream, and the live region is drawn again below it. Partial lines wait
+    # for their newline or the next event, whichever comes first.
     class LiveOutput
       DEFAULT_WIDTH = 80
       DEFAULT_HEIGHT = 24
@@ -46,35 +52,118 @@ module RSpec
         @committed_groups = 0  # number of top-level groups above the live region
         @last_committed = nil  # last committed group that was displayed
         @started = false
+        @proxies = []          # StrayOutput proxies currently installed
+        @pending = {}          # proxy => partial line not yet printed (bytes)
+        @deferred = []         # [proxy, text] written from signal handlers, printed at the next event
+        # Specs may write from other threads. Not reentrant, and need not be: drawing
+        # writes to the original streams, never through the proxies.
+        @lock = Mutex.new
+      end
+
+      # Starts capturing output written to $stdout and $stderr.
+      def start
+        @lock.synchronize do
+          $stdout = capture($stdout)
+          $stderr = capture($stderr)
+        end
       end
 
       def group_started(_group, _depth)
-        render
+        @lock.synchronize { render }
       end
 
       def group_finished(_group, depth)
-        render
-        commit if depth.zero?
+        @lock.synchronize do
+          render
+          commit if depth.zero?
+        end
       end
 
       def example_started(_example, _depth)
-        render
+        @lock.synchronize { render }
       end
 
       def example_finished(_example, _depth)
-        render
+        @lock.synchronize { render }
+      end
+
+      # An RSpec message notification.
+      def message(text)
+        @lock.synchronize { print_above("#{text}\n", @output) }
+      end
+
+      # Called by StrayOutput with everything written to it.
+      def stray_output(proxy, text)
+        @lock.synchronize do
+          buffer = (@pending[proxy] ||= String.new) << text.b
+          newline = buffer.rindex("\n")
+          print_above(buffer.slice!(0..newline), proxy.io) if newline
+        end
+      rescue ThreadError => e
+        # Signal handlers cannot take locks (RSpec writes its "shutting down" message from
+        # its SIGINT handler), and may have interrupted a render, so drawing now is unsafe.
+        raise unless e.message.include?("trap context")
+
+        @deferred << [proxy, text.b] # Array#<< needs no lock
       end
 
       # Final redraw before RSpec prints its failure, pending and summary output;
-      # everything shown so far becomes permanent.
+      # everything shown so far becomes permanent, and $stdout and $stderr are restored.
       def finish
-        render
-        commit
+        @lock.synchronize do
+          release
+          render
+          commit
+        end
       end
 
       private
 
+      def capture(io)
+        return io if io.is_a?(StrayOutput) || !(io.respond_to?(:tty?) && io.tty?)
+
+        StrayOutput.new(io, self).tap { |proxy| @proxies << proxy }
+      end
+
+      # Restores the original streams, unless something else has replaced them since.
+      def release
+        flush_pending
+        $stdout = $stdout.io if @proxies.include?($stdout)
+        $stderr = $stderr.io if @proxies.include?($stderr)
+        @proxies = []
+      end
+
+      # Prints deferred output and partial lines, ending the latter so that the live
+      # region starts on a new line.
+      def flush_pending
+        while (proxy, text = @deferred.shift)
+          (@pending[proxy] ||= String.new) << text
+        end
+        @pending.each do |proxy, buffer|
+          print_above(buffer.end_with?("\n") ? buffer : "#{buffer}\n", proxy.io) unless buffer.empty?
+          buffer.clear
+        end
+      end
+
+      # Clears the live region, writes `text` (complete lines) through `io` and draws
+      # the live region again below it.
+      def print_above(text, io)
+        clear = @frame.empty? ? "" : "\r#{format(CURSOR_UP, @frame.size)}#{CLEAR_TO_END_OF_SCREEN}"
+        redraw = @frame.map { |line| "#{line}\n" }.join
+        if io.equal?(@output)
+          @output.write([clear, text, redraw].map(&:b).join) # text may hold any bytes
+        else
+          @output.write(clear)
+          @output.flush if @output.respond_to?(:flush)
+          io.write(text)
+          io.flush if io.respond_to?(:flush)
+          @output.write(redraw)
+        end
+        @output.flush if @output.respond_to?(:flush)
+      end
+
       def render
+        flush_pending
         columns, rows = terminal_size
         layout = Layout.new(@symbols, width: columns)
         lines =

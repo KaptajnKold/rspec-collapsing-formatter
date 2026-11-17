@@ -25,8 +25,9 @@ class FakeTTY < StringIO
   # StringIO#puts, #print and #<< all go through #write.
   def write(*data)
     data.each do |chunk|
-      @writes << chunk.to_s
-      terminal.feed(chunk)
+      text = chunk.to_s.dup.force_encoding(Encoding::UTF_8) # like a UTF-8 terminal, whatever the string's encoding
+      @writes << text
+      terminal.feed(text)
     end
     super
   end
