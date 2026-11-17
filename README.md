@@ -55,11 +55,11 @@ The `(FAILED - n)` numbers match the numbers in that failure list.
 
 ## Installation
 
-The gem is not published to RubyGems yet. Add it to your Gemfile from a checkout:
+The gem is not published to RubyGems yet. Add it to your Gemfile from GitHub:
 
 ```ruby
 group :test do
-  gem "rspec-collapsing-formatter", path: "path/to/rspec-collapsing-formatter"
+  gem "rspec-collapsing-formatter", git: "https://github.com/KaptajnKold/rspec-collapsing-formatter"
 end
 ```
 

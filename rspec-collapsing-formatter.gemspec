@@ -13,6 +13,12 @@ Gem::Specification.new do |spec|
 
   spec.summary = "An RSpec documentation-style formatter that collapses finished example groups."
   spec.license = "MIT"
+  spec.homepage = "https://github.com/KaptajnKold/rspec-collapsing-formatter"
+  spec.metadata = {
+    "source_code_uri" => spec.homepage,
+    "bug_tracker_uri" => "#{spec.homepage}/issues",
+    "rubygems_mfa_required" => "true"
+  }
   spec.required_ruby_version = ">= 3.1"
 
   spec.files = Dir["lib/**/*.rb", "README.md", "LICENSE"]
