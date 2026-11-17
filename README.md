@@ -63,9 +63,9 @@ group :test do
 end
 ```
 
-It requires Ruby 3.1 or later (developed on 3.4) and rspec-core 3.10 or later (tested
-with 3.13). Its only other dependency is `unicode-display_width` (2.4 up to 4), to
-measure line widths.
+It requires Ruby 3.1 or later and rspec-core 3.10 or later. Its only other dependency is
+`unicode-display_width` (2.4 up to 4), to measure line widths. It is tested on Ruby 3.1
+and 3.4, with rspec-core 3.10 and 3.13 and `unicode-display_width` 2.x and 3.x.
 
 ## Usage
 
