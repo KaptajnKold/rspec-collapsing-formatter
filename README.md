@@ -55,13 +55,15 @@ The `(FAILED - n)` numbers match the numbers in that failure list.
 
 ## Installation
 
-The gem is not published to RubyGems yet. Add it to your Gemfile from GitHub:
+Add it to your Gemfile:
 
 ```ruby
 group :test do
-  gem "rspec-collapsing-formatter", git: "https://github.com/KaptajnKold/rspec-collapsing-formatter"
+  gem "rspec-collapsing-formatter"
 end
 ```
+
+or install it with `gem install rspec-collapsing-formatter`.
 
 It requires Ruby 3.1 or later and rspec-core 3.10 or later. Its only other dependency is
 `unicode-display_width` (2.4 up to 4), to measure line widths. It is tested on Ruby 3.1
