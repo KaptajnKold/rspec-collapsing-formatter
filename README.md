@@ -220,7 +220,6 @@ complicated:
   wrap.
 - **Parallel runs:**
   - Output that bypasses `$stdout`/`$stderr` in any process can corrupt the tree, as above.
-  - On Ctrl-C, RSpec's "shutting down" notice is printed once per process.
   - If the first process crashes, the tree stops updating; the other processes still
     print their results when they finish.
   - parallel_tests' `--test-file-limit` option, which runs several RSpec processes one

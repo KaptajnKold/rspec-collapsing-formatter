@@ -18,6 +18,10 @@ module RSpec
       # starting, before it falls back to working on its own.
       CONNECT_TIMEOUT = 30
 
+      # The notice RSpec prints on stderr when it is interrupted. Ctrl-C interrupts
+      # every process, so each would print it.
+      INTERRUPT_NOTICE = /\A\n?RSpec is shutting down/
+
       # Replaces $stdout and/or $stderr by StrayOutput proxies for the duration of the
       # run, handing what is written to them to #stray_output.
       module StreamCapture
@@ -107,6 +111,7 @@ module RSpec
           @lock = Monitor.new
           @changed = @lock.new_cond
           @deferred = [] # own output written from signal handlers, which cannot take locks
+          @interrupt_notice_shown = false
           # Workers that have not connected by then have given up and work on their own.
           @newcomer_deadline = now + connect_timeout + 1
           @server = Transport::Server.new(context.address) { |worker, event| received(worker, event) }
@@ -157,10 +162,22 @@ module RSpec
               end
             @changed.broadcast
           end
-          return unless event
+          return unless event && show?(event)
 
           event.worker = worker # trust the connection, not the message
           @display.call(event)
+        end
+
+        # Shows RSpec's interrupt notice only once: not at all if this process was
+        # interrupted too, since it prints its own.
+        def show?(event)
+          return true unless event.is_a?(Events::Output) && event.text.match?(INTERRUPT_NOTICE)
+
+          @lock.synchronize do
+            shown = @interrupt_notice_shown || RSpec.world.wants_to_quit
+            @interrupt_notice_shown = true
+            !shown
+          end
         end
 
         def wait_for_workers

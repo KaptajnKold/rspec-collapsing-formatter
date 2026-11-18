@@ -97,6 +97,35 @@ RSpec.describe RSpec::CollapsingFormatter::Parallel do
     end
   end
 
+  describe "RSpec's interrupt notice" do
+    let(:notice) { "\nRSpec is shutting down and will print the summary report... Interrupt again to force quit.\n" }
+
+    # Prints the notice in a worker, followed by a group, and waits until the group
+    # has arrived, so the notice would have too.
+    def print_notice(number, group)
+      remote = worker(number)
+      remote.stray_output(nil, notice)
+      remote.call(RSpec::CollapsingFormatter::Events::GroupStarted.new(description: group, worker: number))
+      wait_for_screen(group)
+    end
+
+    it "is shown once when several workers print it" do
+      coordinator
+      print_notice(2, "Auction")
+      print_notice(3, "Bid")
+
+      expect(tty.terminal.lines.grep(/shutting down/).size).to eq(1)
+    end
+
+    it "is not shown for workers when the coordinator was interrupted too, as it prints its own" do
+      allow(RSpec.world).to receive(:wants_to_quit).and_return(true)
+      coordinator
+      print_notice(2, "Auction")
+
+      expect(tty.terminal.lines.grep(/shutting down/)).to be_empty
+    end
+  end
+
   it "gives up connecting when there is no coordinator" do
     expect(worker(2, timeout: 0.1)).to be_nil
   end

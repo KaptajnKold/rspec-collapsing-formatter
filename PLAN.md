@@ -295,4 +295,6 @@ live/stream output
   groups.
 - **Not supported:** parallel_tests' `--test-file-limit`, which runs several RSpec
   processes in turn per worker; the coordinator's process may exit before the run ends.
-- **Known gap:** on Ctrl-C, RSpec's shutdown notice appears once per process.
+- **Interrupts.** Ctrl-C interrupts every process, and each prints RSpec's shutdown
+  notice. The coordinator shows it once: it drops the workers' copies (matched by text)
+  if it was interrupted itself, since it prints its own, and otherwise shows the first.
