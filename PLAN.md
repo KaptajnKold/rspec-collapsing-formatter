@@ -177,6 +177,11 @@ at the bottom.
    `--fail-fast` cleanup.
 5. Stray-output proxy and `message` handling.
 6. README: usage, screenshots, documented simplifications.
+7. Event/display core: a refactor that leaves behavior unchanged and prepares for parallel
+   runners (see §10). The existing specs must pass unchanged.
+8. parallel_tests adapter, with the event transport.
+9. turbo_tests adapter (needs the worker id passed to formatters; upstream change or shim).
+10. flatware adapter (needs group events; upstream change).
 
 ## 9. Open decisions
 
@@ -185,3 +190,78 @@ at the bottom.
 - Non-TTY style: documentation style, not summaries only.
 - `$stdout`/`$stderr` proxy (the one invasive piece). The alternative is to accept that
   stray output can corrupt the live region.
+
+## 10. Parallel runners
+
+Goal: one live tree for a suite split across several processes, for every popular parallel
+runner, starting with parallel_tests. A throwaway prototype showed that
+parallel_tests works if one worker draws on stderr, the others send it their events over a
+Unix socket, and no worker writes to stdout until the display is finished.
+
+### Layers and the direction of dependencies
+
+Each layer depends only on the layers below it. Nothing below the adapters knows that
+parallel runners exist, and nothing below the formatter knows about RSpec notifications.
+
+```
+formatter          RSpec notifications → events; picks a role via the runner registry
+  │
+runners/*          one adapter per runner: detection, roles, runner-specific protocol
+  │
+transport          events ⇄ JSON lines over a Unix socket (runner-neutral)
+  │
+display            consumes events for one or more workers → tree → output
+  │
+tree, layout,      as today, except the tree tracks a position per worker
+live/stream output
+```
+
+- **Events** are plain value objects: `GroupStarted(description)`, `GroupFinished`,
+  `ExampleStarted(description)`, `ExampleFinished(description, status, detail)`,
+  `Output(text)` and `WorkerFinished`, each tagged with a worker id. They are the only
+  thing the layers exchange. The single-process formatter sends them straight to a
+  display in the same process, with worker id 1.
+- **Display** owns the tree and the output and applies events to them. It doesn't know
+  where events come from: the formatter in the same process, a socket, or a runner's
+  parent process.
+- **Tree** keeps a separate stack of open groups and a running example for each worker,
+  and a single list of top-level groups. With one worker it behaves as it does today.
+- **Layout and the outputs** gain support for several running top-level groups, the
+  budget that divides the screen between them, and the compact one-line-per-worker
+  mode. They never see worker ids or runner names.
+- **Transport** turns events into JSON lines over a socket, plus the control messages
+  `go` and `done` for holding back each worker's dump. Any runner whose workers can't
+  hand events to a parent process can reuse it.
+- **Runner adapters** live in `lib/rspec/collapsing_formatter/runners/`, one file each.
+  An adapter answers `detect(env)` and returns the role for this process: `:solo`,
+  `:coordinator` or `:worker`. It also supplies the runner-specific details: where the
+  socket lives, how many workers to expect, and which process coordinates.
+  - parallel_tests: coordinator and workers, connected by the transport.
+  - turbo_tests and flatware: the display runs in the runner's parent process, so no
+    transport is needed, only a mapping from the runner's reporter calls to events.
+- **Registry** is the only place that lists the adapters and is the only code the
+  formatter calls about runners. Adapters are loaded only when needed.
+
+### Rules
+
+- **No runtime dependency on any runner.** Adapters detect their runner from environment
+  variables (e.g. `TEST_ENV_NUMBER`, `PARALLEL_TEST_GROUPS`, `PARALLEL_PID_FILE`) and
+  never `require` the runner's gem. Runners appear only in the Gemfile's test group, for
+  the end-to-end tests.
+- **One format name.** Users keep `--format RSpec::CollapsingFormatter`, and the
+  registry chooses the role. Runners that configure formatters in their parent process
+  (turbo_tests) are the exception, and get whatever entry point they require.
+- **Fall back, never fail.** If detection is ambiguous, the coordinator is unreachable, or
+  the output is not a terminal, the formatter uses the single-process behavior (or the
+  append-only output), as today.
+- **Tests per layer.** Display tests feed events from several workers to a virtual
+  terminal, with no processes. Transport tests use a socket pair. Every adapter passes a
+  shared contract spec, plus an end-to-end run of the real runner under a pseudo-terminal.
+
+### Open questions
+
+- Failure numbers: per worker (`FAILED - 1, worker 3`, matching each worker's own failure
+  list), or renumbered by the coordinator, which would then no longer match the dumps.
+- `parallel_rspec | tee log`: stderr is still the terminal, so the live tree would appear
+  on screen while the dumps go to the log. Keep that, or fall back to append-only output?
+- Timeout for a worker that never connects, and a fallback if the coordinator dies.
