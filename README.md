@@ -173,7 +173,8 @@ bundle exec rspec
 ```
 
 The design is described in [PLAN.md](PLAN.md), and the original brief is in
-[REQUIREMENTS.md](REQUIREMENTS.md). In short, RSpec events update a tree (`tree.rb`).
+[REQUIREMENTS.md](REQUIREMENTS.md). In short, the formatter turns RSpec notifications into
+events (`events.rb`), and a display (`display.rb`) applies them to a tree (`tree.rb`).
 `layout.rb` turns the tree into lines without any IO, and `live_output.rb` or
 `stream_output.rb` writes them. Only `live_output.rb` knows about cursor movement.
 

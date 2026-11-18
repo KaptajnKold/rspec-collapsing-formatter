@@ -7,7 +7,9 @@ See `REQUIREMENTS.md` for the requirements. This document describes how we meet 
 A small gem, `rspec-collapsing-formatter`.
 
 ```
-lib/rspec/collapsing_formatter.rb                # RSpec-facing formatter (events → tree → output)
+lib/rspec/collapsing_formatter.rb                # RSpec-facing formatter: notifications → events
+lib/rspec/collapsing_formatter/events.rb         # event value objects, tagged with a worker
+lib/rspec/collapsing_formatter/display.rb        # events → tree changes → output calls
 lib/rspec/collapsing_formatter/tree.rb           # GroupNode / ExampleNode, status + counts
 lib/rspec/collapsing_formatter/layout.rb         # pure: tree → [Line] (text + style), given width
 lib/rspec/collapsing_formatter/live_output.rb    # TTY: diffs frames, rewrites screen with ANSI
@@ -24,7 +26,7 @@ rspec --require rspec/collapsing_formatter --format RSpec::CollapsingFormatter
 
 or the same two lines in `.rspec`.
 
-Data flow: **events → tree → layout → output**. Only the output classes know about
+Data flow: **notifications → events → display → tree → layout → output**. Only the output classes know about
 terminals; only `LiveOutput` emits cursor-control sequences.
 
 ### Dependencies
@@ -216,11 +218,13 @@ tree, layout,      as today, except the tree tracks a position per worker
 live/stream output
 ```
 
-- **Events** are plain value objects: `GroupStarted(description)`, `GroupFinished`,
-  `ExampleStarted(description)`, `ExampleFinished(description, status, detail)`,
-  `Output(text)` and `WorkerFinished`, each tagged with a worker id. They are the only
-  thing the layers exchange. The single-process formatter sends them straight to a
-  display in the same process, with worker id 1.
+- **Events** are plain value objects: `Started`, `GroupStarted(description)`,
+  `GroupFinished`, `ExampleStarted(description)`,
+  `ExampleFinished(description, status, detail)`, `Message(text)` and `Finished`, each
+  tagged with a worker. They are the only thing the layers exchange. The single-process
+  formatter sends them straight to a display in the same process, with worker `nil`, the
+  tree's default. (Done in milestone 7. Output from specs in other processes will need
+  an event of its own in milestone 8, since partial lines must be kept apart per worker.)
 - **Display** owns the tree and the output and applies events to them. It doesn't know
   where events come from: the formatter in the same process, a socket, or a runner's
   parent process.

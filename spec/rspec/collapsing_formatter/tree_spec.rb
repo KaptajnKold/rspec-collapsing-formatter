@@ -107,4 +107,30 @@ RSpec.describe RSpec::CollapsingFormatter::Tree do
       end
     end
   end
+
+  describe "with several workers" do
+    it "keeps a separate position for each worker, sharing the top-level groups" do
+      user = tree.group_started("User", worker: 1)
+      auction = tree.group_started("Auction", worker: 2)
+      active = tree.group_started("when active", worker: 1)
+      tree.example_started("accepts bids", worker: 2)
+      tree.example_started("is valid", worker: 1)
+      tree.example_finished("accepts bids", :passed, worker: 2)
+      tree.example_finished("is valid", :failed, "FAILED - 1", worker: 1)
+
+      expect(tree.groups).to eq([user, auction])
+      expect(active.parent).to eq(user)
+      expect(auction.children.map { |node| [node.description, node.status] }).to eq([["accepts bids", :passed]])
+      expect(active.children.map { |node| [node.description, node.status] }).to eq([["is valid", :failed]])
+      expect([tree.depth(1), tree.depth(2), tree.depth]).to eq([2, 1, 0])
+    end
+
+    it "finishes the innermost open group of the given worker" do
+      tree.group_started("User", worker: 1)
+      tree.group_started("Auction", worker: 2)
+
+      expect(tree.group_finished(worker: 1).description).to eq("User")
+      expect(tree.groups.map(&:finished?)).to eq([true, false])
+    end
+  end
 end

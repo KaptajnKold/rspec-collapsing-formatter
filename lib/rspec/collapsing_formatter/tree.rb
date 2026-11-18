@@ -103,39 +103,46 @@ module RSpec
 
     # The hierarchy of groups and examples seen so far, built from RSpec events.
     #
-    # RSpec runs examples one at a time, so the tree tracks the currently open groups
-    # as a stack and the currently running example.
+    # Each worker runs examples one at a time, so the tree tracks, per worker, the
+    # currently open groups as a stack and the currently running example. All workers
+    # share one list of top-level groups, in the order they started. A run in a single
+    # process has one worker, nil, the default.
     class Tree
+      # Where a worker is in the tree.
+      Position = Struct.new(:open_groups, :current_example)
+
       attr_reader :groups
 
       def initialize
         @groups = []
-        @open_groups = []
-        @current_example = nil
+        @positions = Hash.new { |positions, worker| positions[worker] = Position.new([], nil) }
       end
 
-      # Nesting depth of the innermost open group (0 when no group is open).
-      def depth
-        @open_groups.size
+      # Nesting depth of the worker's innermost open group (0 when no group is open).
+      def depth(worker = nil)
+        @positions[worker].open_groups.size
       end
 
-      def group_started(description)
-        group = add(GroupNode.new(description), @open_groups.last)
-        @open_groups.push(group)
+      def group_started(description, worker: nil)
+        open_groups = @positions[worker].open_groups
+        group = add(GroupNode.new(description), open_groups.last)
+        open_groups.push(group)
         group
       end
 
-      def group_finished
-        @open_groups.pop.tap(&:finish)
+      def group_finished(worker: nil)
+        @positions[worker].open_groups.pop.tap(&:finish)
       end
 
-      def example_started(description)
-        @current_example = add(ExampleNode.new(description), @open_groups.last)
+      def example_started(description, worker: nil)
+        position = @positions[worker]
+        position.current_example = add(ExampleNode.new(description), position.open_groups.last)
       end
 
-      def example_finished(description, status, detail = nil)
-        example = @current_example || example_started(description)
-        @current_example = nil
+      def example_finished(description, status, detail = nil, worker: nil)
+        position = @positions[worker]
+        example = position.current_example || example_started(description, worker: worker)
+        position.current_example = nil
         example.finish(status, detail, description: description)
         example
       end

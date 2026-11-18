@@ -8,13 +8,15 @@ require "rspec/collapsing_formatter/layout"
 require "rspec/collapsing_formatter/stream_output"
 require "rspec/collapsing_formatter/stray_output"
 require "rspec/collapsing_formatter/live_output"
+require "rspec/collapsing_formatter/events"
+require "rspec/collapsing_formatter/display"
 
 module RSpec
   # A documentation-style formatter that collapses finished example groups.
   #
   # Failure, pending and summary output is inherited unchanged from RSpec's
-  # BaseTextFormatter. This class only translates RSpec events into changes to the
-  # tree and calls on an output object, which owns everything about how lines reach
+  # BaseTextFormatter. This class only translates RSpec notifications into events and
+  # hands them to a Display, which owns the tree and everything about how lines reach
   # the terminal.
   class CollapsingFormatter < Core::Formatters::BaseTextFormatter
     VERSION = "0.1.0"
@@ -27,40 +29,30 @@ module RSpec
 
     def initialize(output)
       super
-      @tree = Tree.new
-      symbols = Symbols.for(output)
-      @renderer =
-        if LiveOutput.supported?(output)
-          LiveOutput.new(output, symbols, @tree)
-        else
-          StreamOutput.new(output, symbols)
-        end
+      @display = Display.for(output)
       @failure_count = 0
     end
 
     def start(notification)
       super
-      @renderer.start
+      emit(Events::Started)
     end
 
     # RSpec messages (e.g. "Run options: ...") are printed above the live region.
     def message(notification)
-      @renderer.message(notification.message)
+      emit(Events::Message, text: notification.message)
     end
 
     def example_group_started(notification)
-      group = @tree.group_started(notification.group.description.strip)
-      @renderer.group_started(group, @tree.depth - 1)
+      emit(Events::GroupStarted, description: notification.group.description.strip)
     end
 
     def example_group_finished(_notification)
-      group = @tree.group_finished
-      @renderer.group_finished(group, @tree.depth)
+      emit(Events::GroupFinished)
     end
 
     def example_started(notification)
-      example = @tree.example_started(notification.example.description.strip)
-      @renderer.example_started(example, @tree.depth)
+      emit(Events::ExampleStarted, description: notification.example.description.strip)
     end
 
     def example_passed(notification)
@@ -80,13 +72,13 @@ module RSpec
     # Called before RSpec's failure, pending and summary output, which is then
     # appended below the tree by the inherited dump methods.
     def start_dump(_notification)
-      @renderer.finish
+      emit(Events::Finished)
     end
 
     # Also finishes the output when the run ends without reaching start_dump.
     # Finishing twice is harmless.
     def close(notification)
-      @renderer.finish
+      emit(Events::Finished)
       super
     end
 
@@ -95,8 +87,11 @@ module RSpec
     # Descriptions are read again on finish: RSpec generates descriptions for
     # examples like `it { is_expected.to be_valid }` only after they have run.
     def example_finished(example, status, detail = nil)
-      node = @tree.example_finished(example.description.strip, status, detail)
-      @renderer.example_finished(node, @tree.depth)
+      emit(Events::ExampleFinished, description: example.description.strip, status: status, detail: detail)
+    end
+
+    def emit(type, **fields)
+      @display.call(type.new(**fields))
     end
   end
 end
