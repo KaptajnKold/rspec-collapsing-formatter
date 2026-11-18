@@ -26,6 +26,12 @@ module RSpec
     # later fails, and if a group whose lines were committed collapses, its summary and
     # everything after it is written below what is already on screen.
     #
+    # In parallel mode (several workers sharing one tree) every running top-level group
+    # is live at once, one per worker. The live region is then always fitted to the
+    # screen (Layout#fitted_lines) instead of committing lines that do not fit, and a
+    # top-level group is committed when it finishes, by moving it above the groups that
+    # are still running. Groups are thus committed in the order they finish.
+    #
     # While running, $stdout and $stderr (when they are terminals) are replaced by
     # StrayOutput proxies. Complete lines written to them, and RSpec messages, are
     # printed above the live region: it is cleared, the text is written through the
@@ -41,8 +47,10 @@ module RSpec
         output.respond_to?(:tty?) && output.tty? && env["TERM"] != "dumb"
       end
 
-      def initialize(output, symbols, tree, env: ENV)
+      def initialize(output, symbols, tree, env: ENV, parallel: false)
         @output = output
+        @parallel = parallel
+        @committed = {}.compare_by_identity # parallel mode: committed top-level groups
         @symbols = symbols
         @tree = tree
         @env = env
@@ -72,10 +80,14 @@ module RSpec
         @lock.synchronize { render }
       end
 
-      def group_finished(_group, depth)
+      def group_finished(group, depth)
         @lock.synchronize do
-          render
-          commit if depth.zero?
+          if @parallel && depth.zero?
+            commit_group(group)
+          else
+            render
+            commit if depth.zero?
+          end
         end
       end
 
@@ -112,8 +124,12 @@ module RSpec
       def finish
         @lock.synchronize do
           release
-          render
-          commit
+          if @parallel
+            commit_remaining
+          else
+            render
+            commit
+          end
         end
       end
 
@@ -167,7 +183,9 @@ module RSpec
         columns, rows = terminal_size
         layout = Layout.new(@symbols, width: columns)
         lines =
-          if @start
+          if @parallel
+            layout.fitted_lines(live_groups, rows - 1, previous: @last_committed)
+          elsif @start
             @start = topmost_hidden_ancestor(layout, @start) || @start
             layout.lines_from(@start)
           else
@@ -184,7 +202,53 @@ module RSpec
         @output.flush if @output.respond_to?(:flush)
         @frame = frame
         @frame_nodes = lines.map(&:node)
-        commit_overflow(rows - 1) # one row is left for the cursor
+        commit_overflow(rows - 1) unless @parallel # one row is left for the cursor
+      end
+
+      # Parallel mode: the top-level groups that have not been committed, in start order.
+      def live_groups
+        @tree.groups.reject { |group| @committed.key?(group) }
+      end
+
+      # Parallel mode: commits a finished top-level group by drawing it in full at the
+      # top of the live region, followed by the groups that are still running. When it
+      # already is the first group, only its own lines change.
+      def commit_group(group)
+        flush_pending
+        columns, rows = terminal_size
+        layout = Layout.new(@symbols, width: columns)
+        @committed[group] = true
+        lines = layout.lines([group], previous: @last_committed)
+        @last_committed = group unless lines.empty?
+        live = layout.fitted_lines(live_groups, rows - 1, previous: @last_committed)
+        draw([*lines, *live].map { |line| @symbols.paint(line) })
+        @frame = @frame.drop(lines.size)
+        @frame_nodes = live.map(&:node)
+      end
+
+      # Parallel mode, at the end of the run: commits every group still on screen (only
+      # those of interrupted workers), in full.
+      def commit_remaining
+        flush_pending
+        layout = Layout.new(@symbols, width: terminal_size.first)
+        remaining = live_groups
+        draw(layout.lines(remaining, previous: @last_committed).map { |line| @symbols.paint(line) })
+        remaining.each { |group| @committed[group] = true }
+        @last_committed = remaining.reverse.find { |group| group.status != :empty } || @last_committed
+        @frame = []
+        @frame_nodes = []
+      end
+
+      # Turns the live region into `frame`.
+      def draw(frame)
+        data = redraw(frame)
+        unless @started
+          data = "\n#{data}"
+          @started = true
+        end
+        @output.write(data) unless data.empty?
+        @output.flush if @output.respond_to?(:flush)
+        @frame = frame
       end
 
       # The outermost group above `node` that now collapsed or turned out empty, which

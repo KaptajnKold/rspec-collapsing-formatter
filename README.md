@@ -141,6 +141,60 @@ starts or finishes.
 The proxies pass everything else (`tty?`, `sync`, `winsize`, …) through to the real streams.
 The real streams are restored before RSpec prints its summary.
 
+## Parallel runs
+
+With [parallel_tests](https://github.com/grosser/parallel_tests), the formatter shows the
+progress of every process in one tree. No configuration is needed beyond the usual
+`--format RSpec::CollapsingFormatter`:
+
+```sh
+bundle exec parallel_rspec -n 4
+```
+
+Each process's running group is expanded at the same time, and finished groups collapse
+above them in the order they finish:
+
+```text
+✓ Bid (12 examples)
+✓ Search (13 examples)
+
+Auction
+  ✗ rejects low bids (FAILED - 1, worker 3)
+  ✓ when active (4 examples)
+  when suspended
+    ▸ does thing 2
+
+Catalog
+  ✓ when active (4 examples)
+  when suspended
+    ✓ does thing 1
+    ▸ does thing 3
+```
+
+When the running groups don't fit on the screen, each is reduced to the path to its
+running example, and if that doesn't fit either, to one line:
+
+```text
+Auction › when active › ▸ does thing 3
+Catalog › when suspended › ▸ does thing 2
+```
+
+Each process still prints its own failure list and summary, one process after the other,
+once the tree is complete; parallel_tests then adds up the totals as usual. Failures are
+numbered per process, so `(FAILED - 1, worker 3)` refers to failure 1 in the list printed
+by process 3.
+
+How it works: the first process draws the tree on stderr, which parallel_tests leaves
+connected to the terminal, and the other processes send it their progress over a Unix
+socket. No process writes to stdout until the tree is complete, since parallel_tests
+copies each process's stdout to the terminal as it arrives.
+
+Each process falls back to the normal behavior if it can't take part: when stderr is not
+a terminal (as in CI, or with `--combine-stderr`), or when it can't reach the first
+process within 30 seconds.
+
+Support for other parallel runners (turbo_tests, flatware) is planned.
+
 ## Limitations
 
 The first version makes these simplifying assumptions where terminal behavior gets
@@ -164,6 +218,15 @@ complicated:
 - **Wide characters.** Emoji widths differ between versions of `unicode-display_width` and
   between terminals. If they disagree, a line can be cut a little short, or in rare cases
   wrap.
+- **Parallel runs:**
+  - Output that bypasses `$stdout`/`$stderr` in any process can corrupt the tree, as above.
+  - On Ctrl-C, RSpec's "shutting down" notice is printed once per process.
+  - If the first process crashes, the tree stops updating; the other processes still
+    print their results when they finish.
+  - parallel_tests' `--test-file-limit` option, which runs several RSpec processes one
+    after another for each worker, is not supported.
+  - With only stdout redirected (`parallel_rspec | tee log`), the tree still appears on the
+    terminal, and the log gets each process's results.
 
 ## Development
 
@@ -176,7 +239,9 @@ The design is described in [PLAN.md](PLAN.md), and the original brief is in
 [REQUIREMENTS.md](REQUIREMENTS.md). In short, the formatter turns RSpec notifications into
 events (`events.rb`), and a display (`display.rb`) applies them to a tree (`tree.rb`).
 `layout.rb` turns the tree into lines without any IO, and `live_output.rb` or
-`stream_output.rb` writes them. Only `live_output.rb` knows about cursor movement.
+`stream_output.rb` writes them. Only `live_output.rb` knows about cursor movement. For
+parallel runs, `runners/` detects the runner, `parallel.rb` holds the coordinator and
+worker roles, and `transport.rb` carries events between processes.
 
 Most tests run without a real terminal. `spec/support/virtual_terminal.rb` is a small
 terminal emulator that interprets the bytes the formatter writes, so specs can assert on

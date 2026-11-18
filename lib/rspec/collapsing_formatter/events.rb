@@ -27,6 +27,10 @@ module RSpec
       # A message from RSpec, e.g. "Run options: ...", without a trailing newline.
       Message = define(:text)
 
+      # Text that specs wrote to $stdout or $stderr in another process. It may end in the
+      # middle of a line; the rest follows in the worker's next Output event.
+      Output = define(:text)
+
       # The worker finished running examples; its failure and summary output follows.
       Finished = define
     end

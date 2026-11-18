@@ -10,6 +10,10 @@ A small gem, `rspec-collapsing-formatter`.
 lib/rspec/collapsing_formatter.rb                # RSpec-facing formatter: notifications → events
 lib/rspec/collapsing_formatter/events.rb         # event value objects, tagged with a worker
 lib/rspec/collapsing_formatter/display.rb        # events → tree changes → output calls
+lib/rspec/collapsing_formatter/transport.rb      # events ⇄ JSON lines over a Unix socket
+lib/rspec/collapsing_formatter/parallel.rb       # coordinator and worker roles
+lib/rspec/collapsing_formatter/runners.rb        # registry of runner adapters
+lib/rspec/collapsing_formatter/runners/*.rb      # one adapter per parallel runner
 lib/rspec/collapsing_formatter/tree.rb           # GroupNode / ExampleNode, status + counts
 lib/rspec/collapsing_formatter/layout.rb         # pure: tree → [Line] (text + style), given width
 lib/rspec/collapsing_formatter/live_output.rb    # TTY: diffs frames, rewrites screen with ANSI
@@ -181,7 +185,7 @@ at the bottom.
 6. README: usage, screenshots, documented simplifications.
 7. Event/display core: a refactor that leaves behavior unchanged and prepares for parallel
    runners (see §10). The existing specs must pass unchanged.
-8. parallel_tests adapter, with the event transport.
+8. parallel_tests adapter, with the event transport (see the decisions at the end of §10).
 9. turbo_tests adapter (needs the worker id passed to formatters; upstream change or shim).
 10. flatware adapter (needs group events; upstream change).
 
@@ -262,10 +266,33 @@ live/stream output
   terminal, with no processes. Transport tests use a socket pair. Every adapter passes a
   shared contract spec, plus an end-to-end run of the real runner under a pseudo-terminal.
 
-### Open questions
+### Decisions made in milestone 8
 
-- Failure numbers: per worker (`FAILED - 1, worker 3`, matching each worker's own failure
-  list), or renumbered by the coordinator, which would then no longer match the dumps.
-- `parallel_rspec | tee log`: stderr is still the terminal, so the live tree would appear
-  on screen while the dumps go to the log. Keep that, or fall back to append-only output?
-- Timeout for a worker that never connects, and a fallback if the coordinator dies.
+- **Failure numbers** are per worker (`FAILED - 1, worker 3`), matching the failure list
+  that worker prints. The worker number is added by the formatter, which knows it; the
+  display doesn't know about workers' numbering.
+- **`parallel_rspec | tee log`** keeps the live tree on the terminal (stderr) and sends
+  each worker's results to the log. Documented, not special-cased.
+- **When the coordinator is done waiting.** `PARALLEL_TEST_GROUPS` is the number of
+  processes requested, not started (fewer start when there are fewer spec files), so it
+  can't be used. The coordinator waits until every connected worker has finished and the
+  pid file (`PARALLEL_PID_FILE`, a JSON array of running processes, unchanged since
+  parallel_tests 3.0) lists no process that hasn't connected. A worker that hasn't
+  connected within the timeout has fallen back to working alone, so the coordinator stops
+  waiting for newcomers after that.
+- **Timeouts and failures.** A worker tries to reach the coordinator for 30 seconds, then
+  works alone (append-only output, since its stdout is a pipe). A worker that disconnects
+  without finishing is treated as finished, and its unfinished group is shown in full at
+  the end. If the coordinator dies, the workers notice when they wait to be released and
+  print their results at once.
+- **Where the display goes.** Parallel mode is used only when stderr is a terminal (the
+  same stderr in every process, so they all decide alike). The coordinator decides
+  whether to color from stderr, not from RSpec's output stream, which is a pipe.
+- **Live layout.** In parallel mode the live region is fitted to the screen
+  (`Layout#fitted_lines`: everything, else the path to each running example, else one
+  line per worker, else as many as fit and a count) and lines are never committed for
+  lack of room. A finished top-level group is committed by moving it above the running
+  groups.
+- **Not supported:** parallel_tests' `--test-file-limit`, which runs several RSpec
+  processes in turn per worker; the coordinator's process may exit before the run ends.
+- **Known gap:** on Ctrl-C, RSpec's shutdown notice appears once per process.

@@ -215,4 +215,76 @@ RSpec.describe RSpec::CollapsingFormatter::Layout do
       expect(render(width: 20)).to eq(["User", "  + is valid for...", "  > b"])
     end
   end
+
+  describe "#fitted_lines" do
+    # Two workers, each in the middle of a top-level group.
+    before do
+      tree.group_started("User", worker: 1)
+      tree.example_started("is valid", worker: 1)
+      tree.example_finished("is valid", :passed, worker: 1)
+      tree.group_started("when suspended", worker: 1)
+      tree.example_started("is invalid", worker: 1)
+      tree.example_finished("is invalid", :passed, worker: 1)
+      tree.example_started("cannot log in", worker: 1)
+
+      tree.group_started("Auction", worker: 2)
+      tree.group_started("when open", worker: 2)
+      tree.example_started("accepts bids", worker: 2)
+      tree.example_finished("accepts bids", :passed, worker: 2)
+      tree.group_finished(worker: 2)
+      tree.example_started("closes", worker: 2)
+    end
+
+    def fit(height, width: nil, previous: nil)
+      described_class.new(symbols, width: width).fitted_lines(tree.groups, height, previous: previous).map(&:to_s)
+    end
+
+    it "shows everything when it fits" do
+      expect(fit(10)).to eq(described_class.new(symbols).lines(tree.groups).map(&:to_s))
+      expect(fit(10).size).to eq(9)
+    end
+
+    it "shows the path to where each group is now when everything does not fit" do
+      expect(fit(8)).to eq(
+        [
+          "User",
+          "  when suspended",
+          "    ▸ cannot log in",
+          "Auction",
+          "  ▸ closes"
+        ]
+      )
+    end
+
+    it "shows the latest finished child when no example is running" do
+      tree.example_finished("closes", :passed, worker: 2)
+
+      expect(fit(5).last(2)).to eq(["Auction", "  ✓ closes"])
+    end
+
+    it "shows one line per group when the paths do not fit" do
+      expect(fit(4)).to eq(["User › when suspended › ▸ cannot log in", "Auction › ▸ closes"])
+    end
+
+    it "truncates one-line paths to the width" do
+      expect(fit(2, width: 20)).to eq(["User › when suspen…", "Auction › ▸ closes"])
+    end
+
+    it "counts the groups that do not fit at all" do
+      expect(fit(1)).to eq(["… 2 more"])
+      tree.group_started("Bid", worker: 3)
+
+      expect(fit(2)).to eq(["User › when suspended › ▸ cannot log in", "… 2 more"])
+    end
+
+    it "separates the first group from an expanded group above it only when showing everything" do
+      failed = tree.group_started("Search", worker: 4)
+      tree.example_finished("finds", :failed, "FAILED - 1", worker: 4)
+      tree.group_finished(worker: 4)
+      tree.groups.delete(failed)
+
+      expect(fit(10, previous: failed).first).to eq("")
+      expect(fit(5, previous: failed).first).to eq("User")
+    end
+  end
 end

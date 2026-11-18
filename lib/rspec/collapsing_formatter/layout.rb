@@ -63,6 +63,28 @@ module RSpec
         lines
       end
 
+      # Lines for several running top-level groups (one per worker) in at most `height`
+      # lines, as detailed as fits:
+      # 1. everything, as `lines` would show it;
+      # 2. for each group, the path to where it is now: its open groups and its latest
+      #    example or finished subgroup;
+      # 3. one line per group, e.g. "User › when suspended › ▸ cannot log in";
+      # 4. as many of those as fit, and a line counting the rest.
+      def fitted_lines(groups, height, previous: nil)
+        full = lines(groups, previous: previous)
+        return full if full.size <= height
+
+        paths = groups.flat_map { |group| path_lines(group) }
+        return paths if paths.size <= height
+
+        summaries = groups.map { |group| one_line(group) }
+        return summaries if summaries.size <= height
+        return [] unless height.positive?
+
+        hidden = summaries.size - (height - 1)
+        [*summaries.first(height - 1), line(0, "#{@symbols.ellipsis} #{hidden} more", @symbols.style(:running), nil)]
+      end
+
       # Whether a finished group is shown as a single summary line, or not at all.
       def hides_children?(group)
         %i[passed pending empty].include?(group.status)
@@ -98,6 +120,35 @@ module RSpec
 
       def node_lines(node, depth)
         node.is_a?(GroupNode) ? group_lines(node, depth) : [example_line(node, depth)]
+      end
+
+      # The group's chain of open (running) groups, outermost first, and the last child
+      # of the innermost one: the running example, or whatever finished last.
+      def open_path(group)
+        chain = [group]
+        while (last = chain.last.children.last).is_a?(GroupNode) && !last.finished?
+          chain << last
+        end
+        [chain, chain.last.children.last]
+      end
+
+      def path_lines(group)
+        chain, latest = open_path(group)
+        headers = chain.each_with_index.map { |node, depth| header_line(node, depth) }
+        return headers unless latest
+
+        depth = chain.size
+        latest_line = latest.is_a?(GroupNode) ? header_line(latest, depth) : example_line(latest, depth)
+        latest.is_a?(GroupNode) && latest.status == :empty ? headers : [*headers, latest_line]
+      end
+
+      def one_line(group)
+        chain, latest = open_path(group)
+        parts = chain.map(&:description)
+        if latest.is_a?(ExampleNode) && !latest.finished?
+          parts << "#{@symbols.glyph(:running)} #{latest.description}"
+        end
+        line(0, parts.join(" #{@symbols.path_separator} "), nil, group)
       end
 
       def expanded?(group)

@@ -432,4 +432,102 @@ RSpec.describe RSpec::CollapsingFormatter::LiveOutput do
     expect(screen).to eq(["", "User", "  ▸ is valid"])
     expect(tty.terminal.cursor).to eq([3, 0])
   end
+
+  describe "in parallel mode" do
+    let(:live) { described_class.new(tty, symbols, tree, env: env, parallel: true) }
+
+    def start(worker, description)
+      group = tree.group_started(description, worker: worker)
+      live.group_started(group, tree.depth(worker) - 1)
+    end
+
+    def finish(worker)
+      group = tree.group_finished(worker: worker)
+      live.group_finished(group, tree.depth(worker))
+    end
+
+    def example(worker, description, status = :passed, detail = nil)
+      live.example_started(tree.example_started(description, worker: worker), tree.depth(worker))
+      return unless status
+
+      live.example_finished(tree.example_finished(description, status, detail, worker: worker), tree.depth(worker))
+    end
+
+    it "shows a running group for each worker" do
+      start(1, "User")
+      start(2, "Auction")
+      example(1, "is valid")
+      example(2, "accepts bids", nil)
+
+      expect(screen).to eq(["", "User", "  ✓ is valid", "", "Auction", "  ▸ accepts bids"])
+    end
+
+    it "moves a finished group above the groups that are still running" do
+      start(1, "User")
+      start(2, "Auction")
+      example(1, "is valid", nil)
+      example(2, "accepts bids")
+      finish(2)
+
+      expect(screen).to eq(["", "✓ Auction (1 example)", "", "User", "  ▸ is valid"])
+      example(1, "is valid")
+      finish(1)
+
+      expect(screen).to eq(["", "✓ Auction (1 example)", "✓ User (1 example)"])
+    end
+
+    it "commits groups in the order they finish, leaving them untouched" do
+      start(1, "User")
+      start(2, "Auction")
+      example(2, "accepts bids")
+      finish(2)
+      writes = tty.writes.size
+      example(1, "is valid")
+
+      expect(tty.writes.drop(writes).join).not_to include("Auction")
+    end
+
+    it "keeps failed groups expanded when committing them" do
+      start(1, "User")
+      start(2, "Auction")
+      example(2, "rejects low bids", :failed, "FAILED - 1, worker 2")
+      finish(2)
+
+      expect(screen).to eq(["", "✗ Auction (1 failed)", "  ✗ rejects low bids (FAILED - 1, worker 2)", "", "User"])
+    end
+
+    it "fits the running groups to the screen instead of committing lines" do
+      tty = FakeTTY.new(rows: 5, columns: 60)
+      live = described_class.new(tty, symbols, tree, env: env, parallel: true)
+      %w[User Auction Bid].each_with_index do |description, worker|
+        live.group_started(tree.group_started(description, worker: worker), 0)
+        2.times do |n|
+          example = tree.example_started("example #{n}", worker: worker)
+          live.example_finished(tree.example_finished(example.description, :passed, worker: worker), 1)
+        end
+      end
+
+      expect(tty.terminal.lines).to eq(%w[User Auction Bid])
+      expect(tty.terminal.scrollback).to eq([""]) # only the blank line written before the first group
+    end
+
+    it "commits groups that never finished, in full, at the end of the run" do
+      start(1, "User")
+      start(2, "Auction")
+      example(1, "is valid")
+      example(2, "accepts bids", nil)
+      live.finish
+
+      expect(screen).to eq(["", "User", "  ✓ is valid", "", "Auction", "  ▸ accepts bids"])
+      expect(tty.terminal.cursor).to eq([6, 0])
+    end
+
+    it "prints messages above all running groups" do
+      start(1, "User")
+      start(2, "Auction")
+      live.message("Run options: include {:focus=>true}")
+
+      expect(screen).to eq(["", "Run options: include {:focus=>true}", "User", "", "Auction"])
+    end
+  end
 end

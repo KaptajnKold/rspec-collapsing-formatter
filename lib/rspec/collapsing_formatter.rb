@@ -10,6 +10,9 @@ require "rspec/collapsing_formatter/stray_output"
 require "rspec/collapsing_formatter/live_output"
 require "rspec/collapsing_formatter/events"
 require "rspec/collapsing_formatter/display"
+require "rspec/collapsing_formatter/transport"
+require "rspec/collapsing_formatter/runners"
+require "rspec/collapsing_formatter/parallel"
 
 module RSpec
   # A documentation-style formatter that collapses finished example groups.
@@ -18,6 +21,10 @@ module RSpec
   # BaseTextFormatter. This class only translates RSpec notifications into events and
   # hands them to a Display, which owns the tree and everything about how lines reach
   # the terminal.
+  #
+  # In a parallel run (see Runners) the events go to a Parallel::Coordinator or
+  # Parallel::Worker instead, and RSpec's failure and summary output is held back
+  # until they let this process print it.
   class CollapsingFormatter < Core::Formatters::BaseTextFormatter
     VERSION = "0.1.0"
 
@@ -29,8 +36,17 @@ module RSpec
 
     def initialize(output)
       super
-      @display = Display.for(output)
       @failure_count = 0
+      @worker = nil
+      context = parallel_context
+      @sink = context && parallel_role(context)
+      if @sink
+        @worker = context.worker
+        @held_output = output
+        @output = StringIO.new(+"") # the inherited dump methods write here until released
+      else
+        @sink = Display.for(output)
+      end
     end
 
     def start(notification)
@@ -61,7 +77,9 @@ module RSpec
 
     def example_failed(notification)
       @failure_count += 1
-      example_finished(notification.example, :failed, "FAILED - #{@failure_count}")
+      detail = "FAILED - #{@failure_count}"
+      detail += ", worker #{@worker}" if @worker # numbered as in this worker's failure list
+      example_finished(notification.example, :failed, detail)
     end
 
     def example_pending(notification)
@@ -80,6 +98,12 @@ module RSpec
     def close(notification)
       emit(Events::Finished)
       super
+      return unless @held_output
+
+      @sink.close do
+        @held_output.write(output.string)
+        @held_output.flush
+      end
     end
 
     private
@@ -91,7 +115,20 @@ module RSpec
     end
 
     def emit(type, **fields)
-      @display.call(type.new(**fields))
+      @sink.call(type.new(worker: @worker, **fields))
+    end
+
+    # This process's place in a parallel run, if it is one whose progress can be shown
+    # live: the display goes to stderr, which runners leave connected to the terminal.
+    def parallel_context
+      context = Runners.detect(ENV)
+      context if context && LiveOutput.supported?(STDERR)
+    end
+
+    # The coordinator or worker for this process; nil (so it works on its own) if the
+    # coordinator cannot listen, or a worker cannot reach it.
+    def parallel_role(context)
+      context.coordinator ? Parallel::Coordinator.start(context, STDERR) : Parallel::Worker.start(context)
     end
   end
 end
