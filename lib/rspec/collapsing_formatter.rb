@@ -26,7 +26,7 @@ module RSpec
   # Parallel::Worker instead, and RSpec's failure and summary output is held back
   # until they let this process print it.
   class CollapsingFormatter < Core::Formatters::BaseTextFormatter
-    VERSION = "0.1.0"
+    VERSION = "0.2.0"
 
     Core::Formatters.register self,
                               :start, :message,
