@@ -8,6 +8,8 @@ finished work no longer takes up one line per example.
 
 ## What it looks like
 
+![A run with rspec, then one with parallel_rspec](docs/showcase.gif)
+
 While a suite is running, the current group is expanded as in the documentation
 formatter, and `▸` marks the example that is running:
 
@@ -241,6 +243,11 @@ events (`events.rb`), and a display (`display.rb`) applies them to a tree (`tree
 `stream_output.rb` writes them. Only `live_output.rb` knows about cursor movement. For
 parallel runs, `runners/` detects the runner, `parallel.rb` holds the coordinator and
 worker roles, and `transport.rb` carries events between processes.
+
+`script/showcase` re-creates `docs/showcase.gif` from real runs of the suite in
+`docs/showcase`, using the formatter from the checkout. It needs ImageMagick 7 and, by
+default, the Menlo font that comes with macOS (`--font` selects another). To change what
+the GIF shows, edit that suite or the scenes at the top of the script.
 
 Most tests run without a real terminal. `spec/support/virtual_terminal.rb` is a small
 terminal emulator that interprets the bytes the formatter writes, so specs can assert on

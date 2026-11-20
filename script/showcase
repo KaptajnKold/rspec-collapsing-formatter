@@ -1,0 +1,310 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Records the showcase GIF in docs/showcase.gif.
+#
+# Each scene runs a real command on the suite in docs/showcase, attached to a
+# pseudo-terminal, with the formatter from this checkout. The output is replayed
+# through a small color terminal emulator at its recorded timing, every screen is
+# drawn with ImageMagick, and the screens are assembled into a GIF. Only the typing of
+# the commands is simulated, and each scene pauses on the finished tree before the
+# results scroll it away.
+#
+# Requires ImageMagick 7 (`magick`) and a monospace font with ✓ ✗ ▸ • … ›; Menlo,
+# which comes with macOS, is the default.
+#
+#   script/showcase [--output PATH] [--font PATH] [--frames DIR]
+#
+# To change what is shown, edit SCENES below or the suite in docs/showcase.
+
+require "optparse"
+require "pty"
+require "io/console"
+require "tmpdir"
+require "fileutils"
+
+ROOT = File.expand_path("..", __dir__)
+
+# What is typed at the prompt, and how fast the suite runs (seconds per example are
+# scaled by pace).
+SCENES = [
+  { command: "bundle exec rspec", pace: 0.5 },
+  { command: "bundle exec parallel_rspec -n 4", pace: 1.0 }
+].freeze
+
+ROWS = 36
+COLUMNS = 88
+TYPING_DELAY = 0.06      # per character
+PROMPT_PAUSE = 0.8       # before typing
+ENTER_PAUSE = 0.5        # after typing
+TREE_PAUSE = 2.5         # on the finished tree, before the results
+LONGEST_GAP = 1.5        # longer pauses in a recording are cut short
+FINAL_PAUSE = { 0 => 3.5 }.tap { |pauses| pauses.default = 5.0 } # at the end of scene n
+SAME_FRAME = 0.03        # output closer together than this is drawn as one frame
+
+# Looks.
+FONT_SIZE = 14
+CELL_WIDTH = FONT_SIZE * 0.6021 # Menlo's advance width
+LINE_HEIGHT = 18
+BASELINE = 14
+PADDING = 18
+TITLE_BAR = 30
+BACKGROUND = "#1e1e2e"
+FOREGROUND = "#cdd6f4"
+PALETTE = %w[#45475a #f38ba8 #a6e3a1 #f9e2af #89b4fa #f5c2e7 #94e2d5 #bac2de].freeze # ANSI 0-7
+WINDOW_BUTTONS = %w[#f38ba8 #f9e2af #a6e3a1].freeze
+
+# Just enough of a terminal for what RSpec and the formatter write: text with
+# auto-wrap, CR, LF with scrolling, cursor up and down, erasing, and foreground
+# colors. Other escape sequences are ignored.
+class Screen
+  Cell = Struct.new(:char, :color)
+
+  attr_reader :row, :column
+
+  def initialize(rows, columns)
+    @rows = rows
+    @columns = columns
+    reset
+  end
+
+  def reset
+    @cells = Array.new(@rows) { blank_row }
+    @row = @column = 0
+    @color = nil
+  end
+
+  def feed(text)
+    text = text.dup.force_encoding(Encoding::UTF_8).scrub
+    until text.empty?
+      if (sequence = text.match(/\A\e\[([0-9;?]*)([A-Za-z])/))
+        control(sequence[1], sequence[2])
+        text = sequence.post_match
+      elsif text.start_with?("\r", "\n") # "\r\n" would be one grapheme cluster
+        put(text[0])
+        text = text[1..]
+      else
+        character = text.grapheme_clusters.first
+        put(character)
+        text = text[character.length..]
+      end
+    end
+  end
+
+  # The visible cells, as [character, color] rows.
+  def snapshot
+    @cells.map { |row| row.map { |cell| [cell.char, cell.color] } }
+  end
+
+  private
+
+  def control(params, command)
+    count = params.empty? ? 1 : params.to_i
+    case command
+    when "A" then @row = [@row - count, 0].max
+    when "B" then @row = [@row + count, @rows - 1].min
+    when "H" then @row = @column = 0
+    when "K" then erase_line_from(@column)
+    when "J"
+      params == "2" ? @cells.map!.with_index { blank_row } : erase_below
+    when "m" then select_color(params)
+    end
+  end
+
+  def put(character)
+    case character
+    when "\r" then @column = 0
+    when "\n" then line_feed
+    else
+      return if character.match?(/\A[[:cntrl:]]\z/)
+
+      if @column >= @columns
+        @column = 0
+        line_feed
+      end
+      @cells[@row][@column] = Cell.new(character, @color)
+      @column += 1
+    end
+  end
+
+  def select_color(params)
+    codes = params.split(";").map(&:to_i)
+    (codes.empty? ? [0] : codes).each do |code|
+      case code
+      when 0, 39 then @color = nil
+      when 30..37 then @color = code - 30
+      when 90..97 then @color = code - 90
+      end
+    end
+  end
+
+  def line_feed
+    if @row == @rows - 1
+      @cells.shift
+      @cells << blank_row
+    else
+      @row += 1
+    end
+  end
+
+  def erase_line_from(column)
+    (column...@columns).each { |c| @cells[@row][c] = Cell.new(" ", nil) }
+  end
+
+  def erase_below
+    erase_line_from(@column)
+    ((@row + 1)...@rows).each { |r| @cells[r] = blank_row }
+  end
+
+  def blank_row
+    Array.new(@columns) { Cell.new(" ", nil) }
+  end
+end
+
+# Runs a command on the showcase suite in a pseudo-terminal. Returns the output as
+# [seconds since start, data] chunks.
+def record(command, pace)
+  environment = {
+    "TERM" => "xterm-256color", "PACE" => pace.to_s, "SPEC_OPTS" => nil,
+    "BUNDLE_GEMFILE" => File.join(ROOT, "Gemfile")
+  }
+  chunks = []
+  started = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+  PTY.open do |controller, child_tty|
+    child_tty.winsize = [ROWS, COLUMNS]
+    pid = Process.spawn(environment, Gem.ruby, "-S", *command.split, chdir: File.join(ROOT, "docs/showcase"),
+                                                                     in: child_tty, out: child_tty, err: child_tty)
+    child_tty.close
+    loop do
+      data = controller.readpartial(65_536)
+      chunks << [Process.clock_gettime(Process::CLOCK_MONOTONIC) - started, data]
+    rescue EOFError, Errno::EIO
+      break
+    end
+    Process.wait(pid)
+  end
+  chunks
+end
+
+# The frames of the whole GIF: [cells, cursor position or nil, seconds shown].
+def frames_for(recordings)
+  screen = Screen.new(ROWS, COLUMNS)
+  frames = []
+  show = ->(seconds, cursor: false) { frames << [screen.snapshot, cursor && [screen.row, screen.column], seconds] }
+
+  SCENES.zip(recordings).each_with_index do |(scene, chunks), index|
+    screen.reset
+    screen.feed("\e[32m$\e[0m ")
+    show.(PROMPT_PAUSE, cursor: true)
+    scene[:command].each_char do |character|
+      screen.feed(character)
+      show.(TYPING_DELAY, cursor: true)
+    end
+    frames.last[2] = ENTER_PAUSE
+    screen.feed("\r\n")
+
+    paused = false
+    bursts = chunks.slice_when { |a, b| b[0] - a[0] > SAME_FRAME }.to_a
+    bursts.each_with_index do |burst, i|
+      text = burst.map(&:last).join.force_encoding(Encoding::UTF_8).scrub
+      results = text.index(/\n*(Pending:|Failures:|Finished in)/)
+      if results && !paused
+        screen.feed(text[0...results])
+        show.(TREE_PAUSE)
+        text = text[results..]
+        paused = true
+      end
+      screen.feed(text)
+      following = bursts[i + 1]
+      show.(following ? [following[0][0] - burst.last[0], LONGEST_GAP].min : FINAL_PAUSE[index])
+    end
+  end
+
+  # Identical consecutive frames become one, shown for as long as both.
+  frames.each_with_object([]) do |frame, merged|
+    if merged.any? && merged.last[0..1] == frame[0..1]
+      merged.last[2] += frame[2]
+    else
+      merged << frame.dup
+    end
+  end
+end
+
+def width = (COLUMNS * CELL_WIDTH + 2 * PADDING).ceil
+def height = ROWS * LINE_HEIGHT + 2 * PADDING + TITLE_BAR
+
+# An ImageMagick drawing of one frame.
+def drawing(cells, cursor, font)
+  draw = +"font '#{font}'\nfont-size #{FONT_SIZE}\n"
+  draw << "fill '#{BACKGROUND}'\nroundrectangle 0,0 #{width - 1},#{height - 1} 10,10\n"
+  WINDOW_BUTTONS.each_with_index do |color, i|
+    x = PADDING + i * 20
+    draw << "fill '#{color}'\ncircle #{x},15 #{x + 6},15\n"
+  end
+  if cursor
+    x = PADDING + cursor[1] * CELL_WIDTH
+    y = TITLE_BAR + PADDING + cursor[0] * LINE_HEIGHT
+    draw << "fill '#{FOREGROUND}'\nrectangle #{x.round(1)},#{y + 2} #{(x + CELL_WIDTH).round(1)},#{y + LINE_HEIGHT}\n"
+  end
+  cells.each_with_index do |row, r|
+    y = TITLE_BAR + PADDING + r * LINE_HEIGHT + BASELINE
+    column = 0
+    row.chunk_while { |a, b| a[1] == b[1] }.each do |run|
+      text = run.map(&:first).join
+      unless text.strip.empty?
+        x = (PADDING + column * CELL_WIDTH).round(1)
+        quoted = text.gsub("\\") { "\\\\" }.gsub('"') { "\\\"" }
+        draw << "fill '#{run.first[1] ? PALETTE[run.first[1]] : FOREGROUND}'\ntext #{x},#{y} \"#{quoted}\"\n"
+      end
+      column += run.size
+    end
+  end
+  draw
+end
+
+def render(frames, font, directory, output)
+  frames.each_with_index { |(cells, cursor), i| File.write(File.join(directory, format("%04d.mvg", i)), drawing(cells, cursor, font)) }
+  queue = Queue.new
+  frames.each_index { |i| queue << i }
+  queue.close
+  Array.new(8) do
+    Thread.new do
+      while (i = queue.pop)
+        base = File.join(directory, format("%04d", i))
+        system("magick", "-size", "#{width}x#{height}", "xc:none", "-draw", "@#{base}.mvg", "#{base}.png",
+               exception: true)
+      end
+    end
+  end.each(&:join)
+
+  delays = frames.each_with_index.flat_map do |frame, i|
+    ["-delay", [(frame[2] * 100).round, 2].max.to_s, File.join(directory, format("%04d.png", i))]
+  end
+  system("magick", "-dispose", "none", *delays, "-loop", "0", "-layers", "Optimize", output, exception: true)
+end
+
+options = { output: File.join(ROOT, "docs/showcase.gif"), font: "/System/Library/Fonts/Menlo.ttc" }
+OptionParser.new do |parser|
+  parser.banner = "Usage: script/showcase [options]"
+  parser.on("--output PATH", "Where to write the GIF (default: docs/showcase.gif)") { |path| options[:output] = path }
+  parser.on("--font PATH", "Monospace font file (default: Menlo)") { |path| options[:font] = path }
+  parser.on("--frames DIR", "Keep the frames (.mvg and .png) in DIR") { |dir| options[:frames] = dir }
+end.parse!
+
+abort "ImageMagick 7 (magick) is required" unless system("magick", "-version", out: File::NULL, err: File::NULL)
+abort "Font not found: #{options[:font]} (use --font)" unless File.exist?(options[:font])
+
+recordings = SCENES.map do |scene|
+  warn "Recording: #{scene[:command]}"
+  record(scene[:command], scene[:pace])
+end
+frames = frames_for(recordings)
+warn "Rendering #{frames.size} frames (#{frames.sum { |frame| frame[2] }.round(1)} s)"
+
+if options[:frames]
+  FileUtils.mkdir_p(options[:frames])
+  render(frames, options[:font], options[:frames], options[:output])
+else
+  Dir.mktmpdir("showcase") { |directory| render(frames, options[:font], directory, options[:output]) }
+end
+warn "Wrote #{options[:output]} (#{File.size(options[:output]) / 1024} KB)"
